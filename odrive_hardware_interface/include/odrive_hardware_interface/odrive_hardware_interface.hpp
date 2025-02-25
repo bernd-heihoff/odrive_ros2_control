@@ -15,6 +15,7 @@
 #pragma once
 
 #include <cmath>
+#include <memory>
 
 #include "hardware_interface/system_interface.hpp"
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
@@ -85,7 +86,8 @@ public:
   return_type write(const rclcpp::Time &, const rclcpp::Duration &) override;
 
 private:
-  ODriveUSB * odrive;
+  // Replace raw pointer with a unique_ptr for automatic cleanup.
+  std::unique_ptr<ODriveUSB> odrive;
 
   std::vector<std::vector<int64_t>> serial_numbers_;
   std::vector<int> axes_;

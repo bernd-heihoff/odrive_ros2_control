@@ -52,7 +52,7 @@ CallbackReturn ODriveHardwareInterface::on_init(const hardware_interface::Hardwa
     enable_watchdogs_.emplace_back(std::stoi(joint.parameters.at("enable_watchdog")));
   }
 
-  odrive = new ODriveUSB();
+  odrive = std::make_unique<ODriveUSB>();
   if (!odrive) {
     RCLCPP_ERROR(rclcpp::get_logger("ODriveHardwareInterface"), "Failed to create ODriveUSB instance");
     return CallbackReturn::ERROR;
