@@ -29,6 +29,30 @@ CallbackReturn ODriveHardwareInterface::on_init(const hardware_interface::Hardwa
     return CallbackReturn::ERROR;
   }
 
+  // Validate that required parameters exist for each sensor
+  for (const auto & sensor : info_.sensors) {
+    if (sensor.parameters.find("serial_number") == sensor.parameters.end()) {
+      RCLCPP_ERROR(rclcpp::get_logger("ODriveHardwareInterface"), "Sensor '%s' missing 'serial_number' parameter", sensor.name.c_str());
+      return CallbackReturn::ERROR;
+    }
+  }
+
+  // Validate required parameters for each joint
+  for (const auto & joint : info_.joints) {
+    if (joint.parameters.find("serial_number") == joint.parameters.end()) {
+      RCLCPP_ERROR(rclcpp::get_logger("ODriveHardwareInterface"), "Joint '%s' missing 'serial_number' parameter", joint.name.c_str());
+      return CallbackReturn::ERROR;
+    }
+    if (joint.parameters.find("axis") == joint.parameters.end()) {
+      RCLCPP_ERROR(rclcpp::get_logger("ODriveHardwareInterface"), "Joint '%s' missing 'axis' parameter", joint.name.c_str());
+      return CallbackReturn::ERROR;
+    }
+    if (joint.parameters.find("watchdog_timeout") == joint.parameters.end()) {
+      RCLCPP_ERROR(rclcpp::get_logger("ODriveHardwareInterface"), "Joint '%s' missing 'watchdog_timeout' parameter", joint.name.c_str());
+      return CallbackReturn::ERROR;
+    }
+  }
+
   serial_numbers_.resize(2);
 
   hw_vbus_voltages_.resize(info_.sensors.size(), std::numeric_limits<double>::quiet_NaN());
