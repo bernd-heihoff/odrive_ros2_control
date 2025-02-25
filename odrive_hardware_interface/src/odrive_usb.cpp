@@ -108,11 +108,13 @@ int ODriveUSB::init(const std::vector<std::vector<int64_t>> & serial_numbers)
     }
   }
 
-  for (auto it = odrive_map_.begin(); it != odrive_map_.end(); it++) {
+  for (auto it = odrive_map_.begin(); it != odrive_map_.end(); ) {
     if (it->first < 0) {
       libusb_release_interface(it->second, 2);
       libusb_close(it->second);
-      odrive_map_.erase(it);
+      it = odrive_map_.erase(it);
+    } else {
+      ++it;
     }
   }
 
