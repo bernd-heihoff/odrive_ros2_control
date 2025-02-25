@@ -200,6 +200,9 @@ int ODriveUSB::endpointOperation(
   int transferred = 0;
   bytes response_packet;
   unsigned char response_data[ODRIVE_MAX_PACKET_SIZE] = {0};
+  
+  // Define a timeout in milliseconds
+  constexpr unsigned int USB_TIMEOUT_MS = 100;
 
   if (MSB) {
     endpoint_id |= 0x8000;
@@ -210,16 +213,17 @@ int ODriveUSB::endpointOperation(
 
   bytes request_packet = encodePacket(sequence_number, endpoint_id, response_size, request_payload);
 
+  // Use a timeout in both transfers to avoid blocking indefinitely
   int ret = libusb_bulk_transfer(
     odrive_handle, ODRIVE_OUT_ENDPOINT, request_packet.data(), request_packet.size(), &transferred,
-    0);
+    USB_TIMEOUT_MS);
   if (ret != LIBUSB_SUCCESS) {
     return ret;
   }
 
   if (MSB) {
     ret = libusb_bulk_transfer(
-      odrive_handle, ODRIVE_IN_ENDPOINT, response_data, ODRIVE_MAX_PACKET_SIZE, &transferred, 0);
+      odrive_handle, ODRIVE_IN_ENDPOINT, response_data, ODRIVE_MAX_PACKET_SIZE, &transferred, USB_TIMEOUT_MS);
     if (ret != LIBUSB_SUCCESS) {
       return ret;
     }
