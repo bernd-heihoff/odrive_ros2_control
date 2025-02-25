@@ -171,17 +171,17 @@ return_type ODriveHardwareInterface::prepare_command_mode_switch(
           if (key == info_.joints[i].name + "/" + hardware_interface::HW_IF_EFFORT) {
             control_level_[i] = integration_level_t::EFFORT;
           }
-
+          break;
         case integration_level_t::EFFORT:
           if (key == info_.joints[i].name + "/" + hardware_interface::HW_IF_VELOCITY) {
             control_level_[i] = integration_level_t::VELOCITY;
           }
-
+          break;
         case integration_level_t::VELOCITY:
           if (key == info_.joints[i].name + "/" + hardware_interface::HW_IF_POSITION) {
             control_level_[i] = integration_level_t::POSITION;
           }
-
+          break;
         case integration_level_t::POSITION:
           break;
       }
