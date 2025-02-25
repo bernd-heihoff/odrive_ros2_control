@@ -20,11 +20,13 @@ ODriveUSB::ODriveUSB() { libusb_context_ = NULL; }
 
 ODriveUSB::~ODriveUSB()
 {
-  for (auto it = odrive_map_.begin(); it != odrive_map_.end(); it++) {
+  // Safety improvement: safely release and erase all device handles without invalidating iterators.
+  while (!odrive_map_.empty()) {
+    auto it = odrive_map_.begin();
     libusb_release_interface(it->second, 2);
     libusb_close(it->second);
+    odrive_map_.erase(it);
   }
-  odrive_map_.clear();
 
   if (libusb_context_) {
     libusb_exit(libusb_context_);
@@ -138,7 +140,12 @@ int ODriveUSB::read(libusb_device_handle * odrive_handle, short endpoint_id, T &
   if (ret != LIBUSB_SUCCESS) {
     return ret;
   }
-
+  // Safety: ensure that the response_payload has enough data.
+  if (response_payload.size() < sizeof(value)) {
+    std::cerr << "Error: received payload size (" << response_payload.size() 
+              << ") less than expected (" << sizeof(value) << ")" << std::endl;
+    return LIBUSB_ERROR_IO;
+  }
   std::memcpy(&value, &response_payload[0], sizeof(value));
 
   return LIBUSB_SUCCESS;
@@ -214,11 +221,15 @@ int ODriveUSB::endpointOperation(
     if (ret != LIBUSB_SUCCESS) {
       return ret;
     }
-
+    // Safety: check that we received at least the expected number of bytes.
+    if (transferred < response_size) {
+      std::cerr << "Warning: Transferred (" << transferred 
+                << ") bytes is less than expected response size (" << response_size << ")" << std::endl;
+      return LIBUSB_ERROR_IO;
+    }
     for (int i = 0; i < transferred; i++) {
       response_packet.emplace_back(response_data[i]);
     }
-
     response_payload = decodePacket(response_packet);
   }
 

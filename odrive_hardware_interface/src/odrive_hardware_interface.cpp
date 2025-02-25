@@ -53,6 +53,10 @@ CallbackReturn ODriveHardwareInterface::on_init(const hardware_interface::Hardwa
   }
 
   odrive = new ODriveUSB();
+  if (!odrive) {
+    RCLCPP_ERROR(rclcpp::get_logger("ODriveHardwareInterface"), "Failed to create ODriveUSB instance");
+    return CallbackReturn::ERROR;
+  }
   CHECK_TS(odrive->init(serial_numbers_));
 
   for (size_t i = 0; i < info_.joints.size(); i++) {
@@ -340,24 +344,27 @@ return_type ODriveHardwareInterface::write(const rclcpp::Time &, const rclcpp::D
         CHECK_RW(odrive->write(
           serial_numbers_[1][i], AXIS__CONTROLLER__INPUT_POS + per_axis_offset * axes_[i],
           input_pos));
+        break;
 
       case integration_level_t::VELOCITY:
         input_vel = hw_commands_velocities_[i] / 2 / M_PI;
         CHECK_RW(odrive->write(
           serial_numbers_[1][i], AXIS__CONTROLLER__INPUT_VEL + per_axis_offset * axes_[i],
           input_vel));
+        break;
 
       case integration_level_t::EFFORT:
         input_torque = hw_commands_efforts_[i];
         CHECK_RW(odrive->write(
           serial_numbers_[1][i], AXIS__CONTROLLER__INPUT_TORQUE + per_axis_offset * axes_[i],
           input_torque));
+        break;
 
       case integration_level_t::UNDEFINED:
         if (enable_watchdogs_[i]) {
-          CHECK_RW(
-            odrive->call(serial_numbers_[1][i], AXIS__WATCHDOG_FEED + per_axis_offset * axes_[i]));
+          CHECK_RW(odrive->call(serial_numbers_[1][i], AXIS__WATCHDOG_FEED + per_axis_offset * axes_[i]));
         }
+        break;
     }
   }
 
