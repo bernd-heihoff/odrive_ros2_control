@@ -140,12 +140,15 @@ int ODriveUSB::read(libusb_device_handle * odrive_handle, short endpoint_id, T &
   int ret = endpointOperation(
     odrive_handle, endpoint_id, sizeof(value), request_payload, response_payload, 1);
   if (ret != LIBUSB_SUCCESS) {
+    std::cerr << "Endpoint read error (endpoint " << endpoint_id << "): " 
+              << libusb_error_name(ret) << std::endl;
     return ret;
   }
   // Safety: ensure that the response_payload has enough data.
   if (response_payload.size() < sizeof(value)) {
-    std::cerr << "Error: received payload size (" << response_payload.size() 
-              << ") less than expected (" << sizeof(value) << ")" << std::endl;
+    std::cerr << "Error on endpoint " << endpoint_id << ": received payload size (" 
+              << response_payload.size() << ") less than expected (" << sizeof(value) << ")" 
+              << std::endl;
     return LIBUSB_ERROR_IO;
   }
   std::memcpy(&value, &response_payload[0], sizeof(value));
@@ -218,6 +221,8 @@ int ODriveUSB::endpointOperation(
     odrive_handle, ODRIVE_OUT_ENDPOINT, request_packet.data(), request_packet.size(), &transferred,
     USB_TIMEOUT_MS);
   if (ret != LIBUSB_SUCCESS) {
+    std::cerr << "Bulk transfer failed on OUT endpoint (seq: " << sequence_number 
+              << ", endpoint: " << endpoint_id << "): " << libusb_error_name(ret) << std::endl;
     return ret;
   }
 
@@ -225,12 +230,16 @@ int ODriveUSB::endpointOperation(
     ret = libusb_bulk_transfer(
       odrive_handle, ODRIVE_IN_ENDPOINT, response_data, ODRIVE_MAX_PACKET_SIZE, &transferred, USB_TIMEOUT_MS);
     if (ret != LIBUSB_SUCCESS) {
+      std::cerr << "Bulk transfer failed on IN endpoint (seq: " << sequence_number 
+                << ", endpoint: " << endpoint_id << "): " << libusb_error_name(ret) << std::endl;
       return ret;
     }
     // Safety: check that we received at least the expected number of bytes.
     if (transferred < response_size) {
-      std::cerr << "Warning: Transferred (" << transferred 
-                << ") bytes is less than expected response size (" << response_size << ")" << std::endl;
+      std::cerr << "Warning (seq: " << sequence_number << ", endpoint: " << endpoint_id 
+                << "): Transferred (" << transferred 
+                << ") bytes is less than expected response size (" << response_size << ")" 
+                << std::endl;
       return LIBUSB_ERROR_IO;
     }
     for (int i = 0; i < transferred; i++) {

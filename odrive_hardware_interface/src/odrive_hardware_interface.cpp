@@ -24,6 +24,11 @@ CallbackReturn ODriveHardwareInterface::on_init(const hardware_interface::Hardwa
     return CallbackReturn::ERROR;
   }
 
+  if (info_.sensors.empty() || info_.joints.empty()) {
+    RCLCPP_ERROR(rclcpp::get_logger("ODriveHardwareInterface"), "No sensors or joints defined in hardware info.");
+    return CallbackReturn::ERROR;
+  }
+
   serial_numbers_.resize(2);
 
   hw_vbus_voltages_.resize(info_.sensors.size(), std::numeric_limits<double>::quiet_NaN());
