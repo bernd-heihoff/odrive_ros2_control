@@ -107,6 +107,11 @@ private:
     double motor_temperature{std::numeric_limits<double>::quiet_NaN()};
 
     AxisControlLevel control_level{AxisControlLevel::UNDEFINED};
+    JointConfig::CommandLimits command_limits;
+    std::int32_t last_axis_error{0};
+    std::int32_t last_motor_error{0};
+    std::int32_t last_encoder_error{0};
+    std::int32_t last_controller_error{0};
   };
 
   TransportFactory transport_factory_;

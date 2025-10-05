@@ -15,6 +15,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -36,6 +37,16 @@ struct JointConfig
   int axis;
   bool enable_watchdog;
   double watchdog_timeout;
+  struct CommandLimits
+  {
+    std::optional<double> position_min;
+    std::optional<double> position_max;
+    std::optional<double> velocity_min;
+    std::optional<double> velocity_max;
+    std::optional<double> effort_min;
+    std::optional<double> effort_max;
+    bool enforce{false};
+  } command_limits;
 };
 
 struct HardwareConfiguration

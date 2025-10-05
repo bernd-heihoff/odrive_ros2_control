@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <optional>
 
 namespace odrive_hardware_interface
 {
@@ -90,6 +91,29 @@ bool parse_double(const std::string & value, double & result)
   } catch (const std::exception &) {
     return false;
   }
+}
+
+bool parse_optional_double(
+  const hardware_interface::ComponentInfo::ParameterMap & parameters,
+  const std::string & key,
+  std::optional<double> & target,
+  std::string & error_message,
+  const std::string & component_name)
+{
+  const auto it = parameters.find(key);
+  if (it == parameters.end()) {
+    target.reset();
+    return true;
+  }
+
+  double parsed_value = 0.0;
+  if (!parse_double(it->second, parsed_value)) {
+    error_message = "Joint '" + component_name + "' has invalid '" + key + "' value";
+    return false;
+  }
+
+  target = parsed_value;
+  return true;
 }
 }  // namespace
 
@@ -169,6 +193,74 @@ bool parse_hardware_configuration(
     }
     if (!parse_bool(enable_watchdog_it->second, joint_config.enable_watchdog)) {
       error_message = "Joint '" + joint.name + "' has invalid 'enable_watchdog' value";
+      return false;
+    }
+
+    joint_config.command_limits.enforce = true;
+    const auto enforce_limits_it = joint.parameters.find("enforce_command_limits");
+    if (enforce_limits_it != joint.parameters.end()) {
+      if (!parse_bool(enforce_limits_it->second, joint_config.command_limits.enforce)) {
+        error_message = "Joint '" + joint.name + "' has invalid 'enforce_command_limits' value";
+        return false;
+      }
+    }
+
+    if (!parse_optional_double(
+        joint.parameters, "command_position_min",
+        joint_config.command_limits.position_min, error_message, joint.name))
+    {
+      return false;
+    }
+    if (!parse_optional_double(
+        joint.parameters, "command_position_max",
+        joint_config.command_limits.position_max, error_message, joint.name))
+    {
+      return false;
+    }
+    if (!parse_optional_double(
+        joint.parameters, "command_velocity_min",
+        joint_config.command_limits.velocity_min, error_message, joint.name))
+    {
+      return false;
+    }
+    if (!parse_optional_double(
+        joint.parameters, "command_velocity_max",
+        joint_config.command_limits.velocity_max, error_message, joint.name))
+    {
+      return false;
+    }
+    if (!parse_optional_double(
+        joint.parameters, "command_effort_min",
+        joint_config.command_limits.effort_min, error_message, joint.name))
+    {
+      return false;
+    }
+    if (!parse_optional_double(
+        joint.parameters, "command_effort_max",
+        joint_config.command_limits.effort_max, error_message, joint.name))
+    {
+      return false;
+    }
+
+    if (joint_config.command_limits.position_min && joint_config.command_limits.position_max &&
+      *joint_config.command_limits.position_min > *joint_config.command_limits.position_max)
+    {
+      error_message = "Joint '" + joint.name + "' has command_position_min greater than "
+        "command_position_max";
+      return false;
+    }
+    if (joint_config.command_limits.velocity_min && joint_config.command_limits.velocity_max &&
+      *joint_config.command_limits.velocity_min > *joint_config.command_limits.velocity_max)
+    {
+      error_message = "Joint '" + joint.name + "' has command_velocity_min greater than "
+        "command_velocity_max";
+      return false;
+    }
+    if (joint_config.command_limits.effort_min && joint_config.command_limits.effort_max &&
+      *joint_config.command_limits.effort_min > *joint_config.command_limits.effort_max)
+    {
+      error_message = "Joint '" + joint.name + "' has command_effort_min greater than "
+        "command_effort_max";
       return false;
     }
 
