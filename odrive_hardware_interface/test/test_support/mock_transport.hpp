@@ -20,6 +20,7 @@
 #include <cstddef>
 #include <cstring>
 #include <deque>
+#include <optional>
 #include <vector>
 
 #include "odrive_hardware_interface/odrive_transport.hpp"
@@ -38,6 +39,11 @@ public:
   std::size_t initialize_call_count() const
   {
     return initialize_call_count_;
+  }
+
+  const std::optional<SerialMatrix> & last_initialize_serials() const
+  {
+    return last_initialize_serials_;
   }
 
   struct ReadExpectation
@@ -63,9 +69,10 @@ public:
     int result;
   };
 
-  int initialize(const SerialMatrix &) override
+  int initialize(const SerialMatrix & serial_numbers) override
   {
     ++initialize_call_count_;
+    last_initialize_serials_ = serial_numbers;
     if (!initialize_expectations_.empty()) {
       const int result = initialize_expectations_.front();
       initialize_expectations_.pop_front();
@@ -169,6 +176,7 @@ protected:
 private:
   std::deque<int> initialize_expectations_;
   std::size_t initialize_call_count_{0};
+  std::optional<SerialMatrix> last_initialize_serials_;
   std::deque<ReadExpectation> read_expectations_;
   std::deque<WriteExpectation> write_expectations_;
   std::deque<CallExpectation> call_expectations_;

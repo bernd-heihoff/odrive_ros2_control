@@ -16,6 +16,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "hardware_interface/hardware_info.hpp"
 #include "odrive_hardware_interface/axis_utils.hpp"
@@ -95,6 +96,149 @@ TEST(LifecycleTest, RecoverReinitializesTransport)
   ASSERT_EQ(2, creation_index);
   ASSERT_NE(nullptr, transport);
   EXPECT_TRUE(transport->expectations_satisfied());
+}
+
+TEST(LifecycleTest, InitializeSupportsMultipleDrivesBySerial)
+{
+  ODriveHardwareInterface interface;
+  const std::int64_t serial0 = 0x0000000000000101LL;
+  const std::int64_t serial1 = 0x0000000000000102LL;
+  const int axis0 = 0;
+  const int axis1 = 1;
+  const float torque0 = 6.5F;
+  const float torque1 = 7.0F;
+  const float torque2 = 8.0F;
+
+  MockTransport * transport = nullptr;
+  interface.set_transport_factory(
+    [&]() {
+      auto instance = std::make_unique<MockTransport>();
+      transport = instance.get();
+      instance->expect_read(
+        serial0,
+        axis_endpoint(odrive::AXIS__MOTOR__CONFIG__TORQUE_CONSTANT, axis0),
+        torque0);
+      instance->expect_write(
+        serial0,
+        axis_endpoint(odrive::AXIS__CONFIG__ENABLE_WATCHDOG, axis0),
+        static_cast<bool>(false));
+      instance->expect_read(
+        serial0,
+        axis_endpoint(odrive::AXIS__MOTOR__CONFIG__TORQUE_CONSTANT, axis1),
+        torque1);
+      instance->expect_write(
+        serial0,
+        axis_endpoint(odrive::AXIS__CONFIG__ENABLE_WATCHDOG, axis1),
+        static_cast<bool>(false));
+      instance->expect_read(
+        serial1,
+        axis_endpoint(odrive::AXIS__MOTOR__CONFIG__TORQUE_CONSTANT, axis0),
+        torque2);
+      instance->expect_write(
+        serial1,
+        axis_endpoint(odrive::AXIS__CONFIG__ENABLE_WATCHDOG, axis0),
+        static_cast<bool>(false));
+      return instance;
+    });
+
+  hardware_interface::HardwareInfo info;
+
+  hardware_interface::ComponentInfo sensor0;
+  sensor0.name = "bus0";
+  sensor0.parameters["serial_number"] = "101";
+  info.sensors.push_back(sensor0);
+
+  hardware_interface::ComponentInfo sensor1;
+  sensor1.name = "bus1";
+  sensor1.parameters["serial_number"] = "102";
+  info.sensors.push_back(sensor1);
+
+  hardware_interface::ComponentInfo joint0;
+  joint0.name = "front_left";
+  joint0.parameters["serial_number"] = "101";
+  joint0.parameters["axis"] = "0";
+  joint0.parameters["watchdog_timeout"] = "0.10";
+  joint0.parameters["enable_watchdog"] = "false";
+  info.joints.push_back(joint0);
+
+  hardware_interface::ComponentInfo joint1;
+  joint1.name = "front_right";
+  joint1.parameters["serial_number"] = "101";
+  joint1.parameters["axis"] = "1";
+  joint1.parameters["watchdog_timeout"] = "0.10";
+  joint1.parameters["enable_watchdog"] = "false";
+  info.joints.push_back(joint1);
+
+  hardware_interface::ComponentInfo joint2;
+  joint2.name = "rear_left";
+  joint2.parameters["serial_number"] = "102";
+  joint2.parameters["axis"] = "0";
+  joint2.parameters["watchdog_timeout"] = "0.10";
+  joint2.parameters["enable_watchdog"] = "false";
+  info.joints.push_back(joint2);
+
+  ASSERT_EQ(CallbackReturn::SUCCESS, interface.on_init(info));
+  ASSERT_NE(nullptr, transport);
+  EXPECT_EQ(1u, transport->initialize_call_count());
+  ASSERT_TRUE(transport->last_initialize_serials().has_value());
+  const auto & matrix = transport->last_initialize_serials().value();
+  ASSERT_EQ(2u, matrix.size());
+  EXPECT_EQ(matrix[0], (std::vector<std::int64_t>{serial0, serial1}));
+  EXPECT_EQ(matrix[1], (std::vector<std::int64_t>{serial0, serial0, serial1}));
+  EXPECT_TRUE(transport->expectations_satisfied());
+}
+
+TEST(LifecycleTest, InitializeFailsWhenTransportCannotMatchSerials)
+{
+  ODriveHardwareInterface interface;
+  const std::int64_t serial0 = 0x0000000000000201LL;
+  const std::int64_t serial1 = 0x0000000000000202LL;
+
+  MockTransport * transport = nullptr;
+  interface.set_transport_factory(
+    [&]() {
+      auto instance = std::make_unique<MockTransport>();
+      transport = instance.get();
+      instance->expect_initialize(-1);
+      return instance;
+    });
+
+  hardware_interface::HardwareInfo info;
+
+  hardware_interface::ComponentInfo sensor0;
+  sensor0.name = "bus0";
+  sensor0.parameters["serial_number"] = "201";
+  info.sensors.push_back(sensor0);
+
+  hardware_interface::ComponentInfo sensor1;
+  sensor1.name = "bus1";
+  sensor1.parameters["serial_number"] = "202";
+  info.sensors.push_back(sensor1);
+
+  hardware_interface::ComponentInfo joint0;
+  joint0.name = "wheel0";
+  joint0.parameters["serial_number"] = "201";
+  joint0.parameters["axis"] = "0";
+  joint0.parameters["watchdog_timeout"] = "0.10";
+  joint0.parameters["enable_watchdog"] = "false";
+  info.joints.push_back(joint0);
+
+  hardware_interface::ComponentInfo joint1;
+  joint1.name = "wheel1";
+  joint1.parameters["serial_number"] = "202";
+  joint1.parameters["axis"] = "1";
+  joint1.parameters["watchdog_timeout"] = "0.10";
+  joint1.parameters["enable_watchdog"] = "false";
+  info.joints.push_back(joint1);
+
+  ASSERT_EQ(CallbackReturn::ERROR, interface.on_init(info));
+  ASSERT_NE(nullptr, transport);
+  EXPECT_EQ(1u, transport->initialize_call_count());
+  ASSERT_TRUE(transport->last_initialize_serials().has_value());
+  const auto & matrix = transport->last_initialize_serials().value();
+  ASSERT_EQ(2u, matrix.size());
+  EXPECT_EQ(matrix[0], (std::vector<std::int64_t>{serial0, serial1}));
+  EXPECT_EQ(matrix[1], (std::vector<std::int64_t>{serial0, serial1}));
 }
 }  // namespace
 }  // namespace odrive_hardware_interface
