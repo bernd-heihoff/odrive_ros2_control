@@ -39,8 +39,10 @@ target_link_libraries(
 
 ament_auto_add_library(
   ${PROJECT_NAME} SHARED
+  src/command_validation.cpp
   src/axis_control.cpp
   src/axis_telemetry.cpp
+  src/error_monitoring.cpp
   src/odrive_configuration.cpp
   src/odrive_hardware_interface.cpp
 )
