@@ -21,29 +21,29 @@
 namespace odrive_hardware_interface
 {
 /// Convert a floating-point error value into an integer bitmask if finite and non-zero.
-std::optional<std::int32_t> extract_error_value(double value);
+std::optional<std::uint64_t> extract_error_value(double value);
 
 /// Log axis error bit transitions for a joint using rclcpp warnings.
 void log_axis_error_transition(
   const std::string & joint_name,
-  std::int32_t current,
-  std::int32_t & last);
+  std::uint64_t current,
+  std::uint64_t & last);
 
 /// Log motor error bit transitions for a joint using rclcpp warnings.
 void log_motor_error_transition(
   const std::string & joint_name,
-  std::int32_t current,
-  std::int32_t & last);
+  std::uint64_t current,
+  std::uint64_t & last);
 
 /// Log encoder error bit transitions for a joint using rclcpp warnings.
 void log_encoder_error_transition(
   const std::string & joint_name,
-  std::int32_t current,
-  std::int32_t & last);
+  std::uint64_t current,
+  std::uint64_t & last);
 
 /// Log controller error bit transitions for a joint using rclcpp warnings.
 void log_controller_error_transition(
   const std::string & joint_name,
-  std::int32_t current,
-  std::int32_t & last);
+  std::uint64_t current,
+  std::uint64_t & last);
 }  // namespace odrive_hardware_interface

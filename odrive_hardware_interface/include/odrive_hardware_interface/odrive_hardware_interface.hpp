@@ -117,10 +117,10 @@ private:
 
     AxisControlLevel control_level{AxisControlLevel::UNDEFINED};
     JointConfig::CommandLimits command_limits;
-    std::int32_t last_axis_error{0};
-    std::int32_t last_motor_error{0};
-    std::int32_t last_encoder_error{0};
-    std::int32_t last_controller_error{0};
+    std::uint64_t last_axis_error{0};
+    std::uint64_t last_motor_error{0};
+    std::uint64_t last_encoder_error{0};
+    std::uint64_t last_controller_error{0};
   };
 
   TransportFactory transport_factory_;
