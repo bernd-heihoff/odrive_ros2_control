@@ -14,7 +14,9 @@
 
 #include "odrive_hardware_interface/odrive_hardware_interface.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <utility>
 #include <vector>
@@ -33,6 +35,7 @@ namespace odrive_hardware_interface
 namespace
 {
 constexpr const char kLoggerName[] = "ODriveHardwareInterface";
+constexpr std::int16_t kOdriveErrorEndpoint = 0;
 
 CallbackReturn to_callback_return(int status, const std::string & action)
 {
@@ -74,6 +77,11 @@ void ODriveHardwareInterface::reset_runtime_state()
 {
   for (auto & sensor : sensors_) {
     sensor.vbus_voltage = std::numeric_limits<double>::quiet_NaN();
+  }
+
+  for (auto & drive : drives_) {
+    drive.odrive_error = std::numeric_limits<double>::quiet_NaN();
+    drive.last_odrive_error = 0;
   }
 
   for (auto & joint : joints_) {
@@ -203,6 +211,29 @@ CallbackReturn ODriveHardwareInterface::on_init(const hardware_interface::Hardwa
     joint.enable_watchdog = joint_config.enable_watchdog;
     joint.command_limits = joint_config.command_limits;
     joints_.emplace_back(joint);
+  }
+
+  drives_.clear();
+  drives_.reserve(hardware_config_.joints.size());
+  for (const auto & joint_config : hardware_config_.joints) {
+    const auto serial_number = joint_config.serial_number;
+    const auto existing = std::find_if(
+      drives_.begin(), drives_.end(),
+      [&](const DriveContext & drive) {
+        return drive.serial_number == serial_number;
+      });
+    if (existing != drives_.end()) {
+      continue;
+    }
+
+    DriveContext drive;
+    drive.serial_number = serial_number;
+    if (joint_config.name.empty()) {
+      drive.label = "drive:" + std::to_string(serial_number);
+    } else {
+      drive.label = joint_config.name + "/drive";
+    }
+    drives_.emplace_back(std::move(drive));
   }
 
   return initialize_transport();
@@ -441,6 +472,21 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
       return to_io_return(status, "reading vbus voltage");
     }
     sensors_[i].vbus_voltage = vbus_voltage;
+  }
+
+  for (auto & drive : drives_) {
+    int32_t odrive_error = 0;
+    if (const int status =
+      transport_->read(drive.serial_number, kOdriveErrorEndpoint, odrive_error);
+      status != 0)
+    {
+      return to_io_return(status, "reading odrive error");
+    }
+
+    drive.odrive_error = static_cast<double>(odrive_error);
+    if (const auto drive_error_value = extract_error_value(drive.odrive_error)) {
+      log_odrive_error_transition(drive.label, *drive_error_value, drive.last_odrive_error);
+    }
   }
 
   for (size_t i = 0; i < info_.joints.size(); i++) {

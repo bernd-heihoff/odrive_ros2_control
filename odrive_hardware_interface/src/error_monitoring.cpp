@@ -98,6 +98,17 @@ constexpr std::array<std::pair<std::uint64_t, const char *>, 8> kControllerError
   {0x00000080, "spinout_detected"},
 }};
 
+constexpr std::array<std::pair<std::uint64_t, const char *>, 8> kODriveErrorTable{{
+  {0x00000001ULL, "control_iteration_missed"},
+  {0x00000002ULL, "dc_bus_under_voltage"},
+  {0x00000004ULL, "dc_bus_over_voltage"},
+  {0x00000008ULL, "dc_bus_over_regen_current"},
+  {0x00000010ULL, "dc_bus_over_current"},
+  {0x00000020ULL, "brake_deadtime_violation"},
+  {0x00000040ULL, "brake_duty_cycle_nan"},
+  {0x00000080ULL, "invalid_brake_resistance"},
+}};
+
 template<std::size_t TableSize>
 void log_error_transition(
   const std::string & joint_name,
@@ -187,5 +198,13 @@ void log_controller_error_transition(
   std::uint64_t & last)
 {
   log_error_transition(joint_name, "Controller error", current, last, kControllerErrorTable);
+}
+
+void log_odrive_error_transition(
+  const std::string & joint_name,
+  std::uint64_t current,
+  std::uint64_t & last)
+{
+  log_error_transition(joint_name, "ODrive error", current, last, kODriveErrorTable);
 }
 }  // namespace odrive_hardware_interface

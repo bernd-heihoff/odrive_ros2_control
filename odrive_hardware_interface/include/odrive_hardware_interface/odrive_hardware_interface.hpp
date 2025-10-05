@@ -93,6 +93,14 @@ private:
     double vbus_voltage{std::numeric_limits<double>::quiet_NaN()};
   };
 
+  struct DriveContext
+  {
+    std::int64_t serial_number{0};
+    std::string label;
+    double odrive_error{std::numeric_limits<double>::quiet_NaN()};
+    std::uint64_t last_odrive_error{0};
+  };
+
   struct JointContext
   {
     std::int64_t serial_number{0};
@@ -128,6 +136,7 @@ private:
   std::unique_ptr<ODriveTransport> transport_;
 
   std::vector<SensorContext> sensors_;
+  std::vector<DriveContext> drives_;
   std::vector<JointContext> joints_;
 };
 }  // namespace odrive_hardware_interface

@@ -46,4 +46,10 @@ void log_controller_error_transition(
   const std::string & joint_name,
   std::uint64_t current,
   std::uint64_t & last);
+
+/// Log top-level ODrive error bit transitions using rclcpp warnings.
+void log_odrive_error_transition(
+  const std::string & joint_name,
+  std::uint64_t current,
+  std::uint64_t & last);
 }  // namespace odrive_hardware_interface
