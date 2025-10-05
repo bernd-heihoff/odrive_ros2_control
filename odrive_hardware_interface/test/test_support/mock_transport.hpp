@@ -30,6 +30,16 @@ namespace odrive_hardware_interface
 class MockTransport : public ODriveTransport
 {
 public:
+  void expect_initialize(int result = 0)
+  {
+    initialize_expectations_.push_back(result);
+  }
+
+  std::size_t initialize_call_count() const
+  {
+    return initialize_call_count_;
+  }
+
   struct ReadExpectation
   {
     std::int64_t serial;
@@ -53,7 +63,16 @@ public:
     int result;
   };
 
-  int initialize(const SerialMatrix &) override {return 0;}
+  int initialize(const SerialMatrix &) override
+  {
+    ++initialize_call_count_;
+    if (!initialize_expectations_.empty()) {
+      const int result = initialize_expectations_.front();
+      initialize_expectations_.pop_front();
+      return result;
+    }
+    return 0;
+  }
 
   template<typename T>
   void expect_read(std::int64_t serial, std::int16_t endpoint, const T & value, int result = 0)
@@ -148,6 +167,8 @@ protected:
   }
 
 private:
+  std::deque<int> initialize_expectations_;
+  std::size_t initialize_call_count_{0};
   std::deque<ReadExpectation> read_expectations_;
   std::deque<WriteExpectation> write_expectations_;
   std::deque<CallExpectation> call_expectations_;

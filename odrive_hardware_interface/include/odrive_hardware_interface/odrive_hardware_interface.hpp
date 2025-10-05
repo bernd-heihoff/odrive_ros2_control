@@ -52,6 +52,12 @@ public:
   CallbackReturn on_deactivate(const rclcpp_lifecycle::State &) override;
 
   ODRIVE_HARDWARE_INTERFACE_PUBLIC
+  CallbackReturn on_cleanup(const rclcpp_lifecycle::State &) override;
+
+  ODRIVE_HARDWARE_INTERFACE_PUBLIC
+  CallbackReturn recover() override;
+
+  ODRIVE_HARDWARE_INTERFACE_PUBLIC
   std::vector<hardware_interface::StateInterface> export_state_interfaces() override;
 
   ODRIVE_HARDWARE_INTERFACE_PUBLIC
@@ -78,6 +84,9 @@ public:
   void set_transport_factory(TransportFactory factory);
 
 private:
+  CallbackReturn initialize_transport();
+  void reset_runtime_state();
+
   struct SensorContext
   {
     std::int64_t serial_number{0};

@@ -16,6 +16,7 @@
 
 #include <array>
 #include <cmath>
+#include <limits>
 #include <optional>
 #include <sstream>
 #include <utility>
@@ -40,6 +41,108 @@ ODriveHardwareInterface::ODriveHardwareInterface()
 void ODriveHardwareInterface::set_transport_factory(TransportFactory factory)
 {
   transport_factory_ = std::move(factory);
+}
+
+void ODriveHardwareInterface::reset_runtime_state()
+{
+  for (auto & sensor : sensors_) {
+    sensor.vbus_voltage = std::numeric_limits<double>::quiet_NaN();
+  }
+
+  for (auto & joint : joints_) {
+    joint.command_position = std::numeric_limits<double>::quiet_NaN();
+    joint.command_velocity = std::numeric_limits<double>::quiet_NaN();
+    joint.command_effort = std::numeric_limits<double>::quiet_NaN();
+
+    joint.position = std::numeric_limits<double>::quiet_NaN();
+    joint.velocity = std::numeric_limits<double>::quiet_NaN();
+    joint.effort = std::numeric_limits<double>::quiet_NaN();
+
+    joint.axis_error = std::numeric_limits<double>::quiet_NaN();
+    joint.motor_error = std::numeric_limits<double>::quiet_NaN();
+    joint.encoder_error = std::numeric_limits<double>::quiet_NaN();
+    joint.controller_error = std::numeric_limits<double>::quiet_NaN();
+    joint.fet_temperature = std::numeric_limits<double>::quiet_NaN();
+    joint.motor_temperature = std::numeric_limits<double>::quiet_NaN();
+
+    joint.torque_constant = std::numeric_limits<float>::quiet_NaN();
+    joint.control_level = AxisControlLevel::UNDEFINED;
+    joint.last_axis_error = 0;
+    joint.last_motor_error = 0;
+    joint.last_encoder_error = 0;
+    joint.last_controller_error = 0;
+  }
+}
+
+CallbackReturn ODriveHardwareInterface::initialize_transport()
+{
+  if (hardware_config_.joints.size() != joints_.size() ||
+    hardware_config_.sensors.size() != sensors_.size())
+  {
+    RCLCPP_ERROR(
+      rclcpp::get_logger(kLoggerName),
+      "Hardware configuration does not match runtime context (joints: %zu/%zu, sensors: %zu/%zu)",
+      hardware_config_.joints.size(), joints_.size(),
+      hardware_config_.sensors.size(), sensors_.size());
+    return CallbackReturn::ERROR;
+  }
+
+  transport_ = transport_factory_ ? transport_factory_() : nullptr;
+  if (!transport_) {
+    RCLCPP_ERROR(
+      rclcpp::get_logger(kLoggerName), "Failed to create ODrive transport instance");
+    return CallbackReturn::ERROR;
+  }
+
+  ODriveTransport::SerialMatrix serial_numbers(2);
+  serial_numbers[0].reserve(sensors_.size());
+  for (const auto & sensor : sensors_) {
+    serial_numbers[0].emplace_back(sensor.serial_number);
+  }
+  serial_numbers[1].reserve(joints_.size());
+  for (const auto & joint : joints_) {
+    serial_numbers[1].emplace_back(joint.serial_number);
+  }
+
+  const auto init_status = transport_->initialize(serial_numbers);
+  if (init_status != 0) {
+    return to_callback_return(init_status, "initialising ODrive transport");
+  }
+
+  for (size_t i = 0; i < joints_.size(); i++) {
+    auto & joint_context = joints_[i];
+    const auto & joint_config = hardware_config_.joints[i];
+
+    float torque_constant = std::numeric_limits<float>::quiet_NaN();
+    const int read_status = transport_->read(
+      joint_context.serial_number,
+      axis_endpoint(odrive::AXIS__MOTOR__CONFIG__TORQUE_CONSTANT, joint_context.axis),
+      torque_constant);
+    if (read_status != 0) {
+      return to_callback_return(read_status, "reading motor torque constant");
+    }
+    joint_context.torque_constant = torque_constant;
+
+    if (joint_context.enable_watchdog) {
+      const int write_timeout_status = transport_->write(
+        joint_context.serial_number,
+        axis_endpoint(odrive::AXIS__CONFIG__WATCHDOG_TIMEOUT, joint_context.axis),
+        static_cast<float>(joint_config.watchdog_timeout));
+      if (write_timeout_status != 0) {
+        return to_callback_return(write_timeout_status, "configuring watchdog timeout");
+      }
+    }
+
+    const int write_enable_status = transport_->write(
+      joint_context.serial_number,
+      axis_endpoint(odrive::AXIS__CONFIG__ENABLE_WATCHDOG, joint_context.axis),
+      static_cast<bool>(joint_context.enable_watchdog));
+    if (write_enable_status != 0) {
+      return to_callback_return(write_enable_status, "enabling watchdog");
+    }
+  }
+
+  return CallbackReturn::SUCCESS;
 }
 
 namespace
@@ -343,58 +446,7 @@ CallbackReturn ODriveHardwareInterface::on_init(const hardware_interface::Hardwa
     joints_.emplace_back(joint);
   }
 
-  transport_ = transport_factory_ ? transport_factory_() : nullptr;
-  if (!transport_) {
-    RCLCPP_ERROR(
-      rclcpp::get_logger(kLoggerName), "Failed to create ODrive transport instance");
-    return CallbackReturn::ERROR;
-  }
-
-  ODriveTransport::SerialMatrix serial_numbers(2);
-  serial_numbers[0].reserve(sensors_.size());
-  for (const auto & sensor : sensors_) {
-    serial_numbers[0].emplace_back(sensor.serial_number);
-  }
-  serial_numbers[1].reserve(joints_.size());
-  for (const auto & joint : joints_) {
-    serial_numbers[1].emplace_back(joint.serial_number);
-  }
-
-  const auto init_status = transport_->initialize(serial_numbers);
-  if (init_status != 0) {
-    return to_callback_return(init_status, "initialising ODrive transport");
-  }
-
-  for (size_t i = 0; i < joints_.size(); i++) {
-    auto & joint_context = joints_[i];
-    float torque_constant;
-    const int read_status = transport_->read(
-      joint_context.serial_number,
-      axis_endpoint(odrive::AXIS__MOTOR__CONFIG__TORQUE_CONSTANT, joint_context.axis),
-      torque_constant);
-    if (read_status != 0) {
-      return to_callback_return(read_status, "reading motor torque constant");
-    }
-    joint_context.torque_constant = torque_constant;
-
-    if (joint_context.enable_watchdog) {
-      const int write_timeout_status = transport_->write(
-        joint_context.serial_number,
-        axis_endpoint(odrive::AXIS__CONFIG__WATCHDOG_TIMEOUT, joint_context.axis),
-        static_cast<float>(hardware_config_.joints[i].watchdog_timeout));
-      if (write_timeout_status != 0) {
-        return to_callback_return(write_timeout_status, "configuring watchdog timeout");
-      }
-    }
-    const int write_enable_status = transport_->write(
-      joint_context.serial_number,
-      axis_endpoint(odrive::AXIS__CONFIG__ENABLE_WATCHDOG, joint_context.axis),
-      static_cast<bool>(joint_context.enable_watchdog));
-    if (write_enable_status != 0) {
-      return to_callback_return(write_enable_status, "enabling watchdog");
-    }
-  }
-  return CallbackReturn::SUCCESS;
+  return initialize_transport();
 }
 
 CallbackReturn ODriveHardwareInterface::on_activate(const rclcpp_lifecycle::State &)
@@ -426,6 +478,34 @@ CallbackReturn ODriveHardwareInterface::on_deactivate(const rclcpp_lifecycle::St
       requested_state);
     if (status != 0) {
       return to_callback_return(status, "requesting axis idle state");
+    }
+  }
+
+  return CallbackReturn::SUCCESS;
+}
+
+CallbackReturn ODriveHardwareInterface::on_cleanup(const rclcpp_lifecycle::State &)
+{
+  transport_.reset();
+  reset_runtime_state();
+  return CallbackReturn::SUCCESS;
+}
+
+CallbackReturn ODriveHardwareInterface::recover()
+{
+  reset_runtime_state();
+  transport_.reset();
+
+  const auto init_result = initialize_transport();
+  if (init_result != CallbackReturn::SUCCESS) {
+    return init_result;
+  }
+
+  for (const auto & joint : joints_) {
+    const int clear_status = transport_->call(
+      joint.serial_number, axis_endpoint(odrive::AXIS__CLEAR_ERRORS, joint.axis));
+    if (clear_status != 0) {
+      return to_callback_return(clear_status, "clearing axis errors during recovery");
     }
   }
 

@@ -85,6 +85,12 @@ if(BUILD_TESTING)
     target_include_directories(test_command_safety PRIVATE ${TEST_INCLUDE_DIR})
     target_link_libraries(test_command_safety ${PROJECT_NAME})
   endif()
+
+  ament_add_gtest(test_lifecycle test/test_lifecycle.cpp)
+  if(TARGET test_lifecycle)
+    target_include_directories(test_lifecycle PRIVATE ${TEST_INCLUDE_DIR})
+    target_link_libraries(test_lifecycle ${PROJECT_NAME})
+  endif()
 endif()
 
 ament_auto_package(
