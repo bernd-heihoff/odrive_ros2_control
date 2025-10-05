@@ -319,6 +319,33 @@ TEST(AxisControlTest, WriteCommandFeedsWatchdogWhenUndefined)
   EXPECT_TRUE(transport.expectations_satisfied());
 }
 
+TEST(AxisControlTest, WriteCommandSkipsWatchdogWhenDisabled)
+{
+  MockTransport transport;
+  double command_pos = 0.0;
+  double command_vel = 0.0;
+  double command_eff = 0.0;
+  double state_pos = 0.0;
+  double state_vel = 0.0;
+  double state_eff = 0.0;
+
+  AxisCommandState command_state{
+    command_pos,
+    command_vel,
+    command_eff,
+    state_pos,
+    state_vel,
+    state_eff};
+
+  std::string failing_stage;
+  const int status = write_axis_command(
+    transport, kSerial, kAxis, AxisControlLevel::UNDEFINED, command_state, false, failing_stage);
+
+  EXPECT_EQ(0, status);
+  EXPECT_TRUE(failing_stage.empty());
+  EXPECT_TRUE(transport.expectations_satisfied());
+}
+
 TEST(AxisTelemetryTest, ReadTelemetryAppliesConversions)
 {
   MockTransport transport;
@@ -391,6 +418,38 @@ TEST(AxisTelemetryTest, ReadTelemetryAppliesConversions)
   EXPECT_DOUBLE_EQ(motor_temp, telemetry_motor_temperature);
 
   EXPECT_TRUE(transport.expectations_satisfied());
+}
+
+TEST(AxisControlTest, WritePositionCommandReportsFailingStage)
+{
+  MockTransport transport;
+  double command_pos = 0.0;
+  double command_vel = 0.0;
+  double command_eff = 0.0;
+  double state_pos = 0.0;
+  double state_vel = 0.0;
+  double state_eff = 0.0;
+
+  AxisCommandState command_state{
+    command_pos,
+    command_vel,
+    command_eff,
+    state_pos,
+    state_vel,
+    state_eff};
+
+  const auto pos_endpoint = axis_endpoint(odrive::AXIS__CONTROLLER__INPUT_POS, kAxis);
+  const auto vel_endpoint = axis_endpoint(odrive::AXIS__CONTROLLER__INPUT_VEL, kAxis);
+
+  transport.expect_write(kSerial, pos_endpoint, 0.0F);
+  transport.expect_write(kSerial, vel_endpoint, 0.0F, -13);
+
+  std::string failing_stage;
+  const int status = write_axis_command(
+    transport, kSerial, kAxis, AxisControlLevel::POSITION, command_state, false, failing_stage);
+
+  EXPECT_EQ(-13, status);
+  EXPECT_EQ("writing velocity command", failing_stage);
 }
 
 TEST(AxisTelemetryTest, PropagatesTransportErrorStage)

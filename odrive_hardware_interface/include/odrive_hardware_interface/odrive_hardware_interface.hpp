@@ -15,6 +15,9 @@
 #pragma once
 
 #include <cmath>
+#include <cstdint>
+#include <functional>
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -36,6 +39,8 @@ class ODriveHardwareInterface : public hardware_interface::SystemInterface
 {
 public:
   RCLCPP_SHARED_PTR_DEFINITIONS(ODriveHardwareInterface)
+
+  ODriveHardwareInterface();
 
   ODRIVE_HARDWARE_INTERFACE_PUBLIC
   CallbackReturn on_init(const hardware_interface::HardwareInfo & info) override;
@@ -67,31 +72,48 @@ public:
   ODRIVE_HARDWARE_INTERFACE_PUBLIC
   return_type write(const rclcpp::Time &, const rclcpp::Duration &) override;
 
+  using TransportFactory = std::function<std::unique_ptr<ODriveTransport>()>;
+
+  ODRIVE_HARDWARE_INTERFACE_PUBLIC
+  void set_transport_factory(TransportFactory factory);
+
 private:
+  struct SensorContext
+  {
+    std::int64_t serial_number{0};
+    double vbus_voltage{std::numeric_limits<double>::quiet_NaN()};
+  };
+
+  struct JointContext
+  {
+    std::int64_t serial_number{0};
+    int axis{0};
+    float torque_constant{std::numeric_limits<float>::quiet_NaN()};
+    bool enable_watchdog{false};
+
+    double command_position{std::numeric_limits<double>::quiet_NaN()};
+    double command_velocity{std::numeric_limits<double>::quiet_NaN()};
+    double command_effort{std::numeric_limits<double>::quiet_NaN()};
+
+    double position{std::numeric_limits<double>::quiet_NaN()};
+    double velocity{std::numeric_limits<double>::quiet_NaN()};
+    double effort{std::numeric_limits<double>::quiet_NaN()};
+
+    double axis_error{std::numeric_limits<double>::quiet_NaN()};
+    double motor_error{std::numeric_limits<double>::quiet_NaN()};
+    double encoder_error{std::numeric_limits<double>::quiet_NaN()};
+    double controller_error{std::numeric_limits<double>::quiet_NaN()};
+    double fet_temperature{std::numeric_limits<double>::quiet_NaN()};
+    double motor_temperature{std::numeric_limits<double>::quiet_NaN()};
+
+    AxisControlLevel control_level{AxisControlLevel::UNDEFINED};
+  };
+
+  TransportFactory transport_factory_;
   HardwareConfiguration hardware_config_;
   std::unique_ptr<ODriveTransport> transport_;
 
-  std::vector<std::vector<int64_t>> serial_numbers_;
-  std::vector<int> axes_;
-  std::vector<float> torque_constants_;
-  std::vector<bool> enable_watchdogs_;
-
-  std::vector<double> hw_vbus_voltages_;
-
-  std::vector<double> hw_commands_positions_;
-  std::vector<double> hw_commands_velocities_;
-  std::vector<double> hw_commands_efforts_;
-  std::vector<double> hw_positions_;
-  std::vector<double> hw_velocities_;
-  std::vector<double> hw_efforts_;
-
-  std::vector<double> hw_axis_errors_;
-  std::vector<double> hw_motor_errors_;
-  std::vector<double> hw_encoder_errors_;
-  std::vector<double> hw_controller_errors_;
-  std::vector<double> hw_fet_temperatures_;
-  std::vector<double> hw_motor_temperatures_;
-
-  std::vector<AxisControlLevel> control_level_;
+  std::vector<SensorContext> sensors_;
+  std::vector<JointContext> joints_;
 };
 }  // namespace odrive_hardware_interface

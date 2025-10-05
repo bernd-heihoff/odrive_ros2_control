@@ -24,6 +24,19 @@
 
 namespace odrive_hardware_interface
 {
+
+ODriveHardwareInterface::ODriveHardwareInterface()
+: transport_factory_([]() {
+      return std::make_unique<odrive::ODriveUSB>();
+    })
+{
+}
+
+void ODriveHardwareInterface::set_transport_factory(TransportFactory factory)
+{
+  transport_factory_ = std::move(factory);
+}
+
 namespace
 {
 constexpr const char kLoggerName[] = "ODriveHardwareInterface";
@@ -66,100 +79,90 @@ CallbackReturn ODriveHardwareInterface::on_init(const hardware_interface::Hardwa
   }
   hardware_config_ = std::move(parsed_config);
 
-  serial_numbers_.clear();
-  serial_numbers_.resize(2);
-  serial_numbers_[0].reserve(hardware_config_.sensors.size());
-  serial_numbers_[1].reserve(hardware_config_.joints.size());
-
-  axes_.clear();
-  axes_.reserve(hardware_config_.joints.size());
-  torque_constants_.clear();
-  torque_constants_.reserve(hardware_config_.joints.size());
-  enable_watchdogs_.clear();
-  enable_watchdogs_.reserve(hardware_config_.joints.size());
-
-  hw_vbus_voltages_.resize(info_.sensors.size(), std::numeric_limits<double>::quiet_NaN());
-
-  hw_positions_.resize(info_.joints.size(), std::numeric_limits<double>::quiet_NaN());
-  hw_velocities_.resize(info_.joints.size(), std::numeric_limits<double>::quiet_NaN());
-  hw_efforts_.resize(info_.joints.size(), std::numeric_limits<double>::quiet_NaN());
-  hw_commands_positions_.resize(info_.joints.size(), std::numeric_limits<double>::quiet_NaN());
-  hw_commands_velocities_.resize(info_.joints.size(), std::numeric_limits<double>::quiet_NaN());
-  hw_commands_efforts_.resize(info_.joints.size(), std::numeric_limits<double>::quiet_NaN());
-
-  hw_axis_errors_.resize(info_.joints.size(), std::numeric_limits<double>::quiet_NaN());
-  hw_motor_errors_.resize(info_.joints.size(), std::numeric_limits<double>::quiet_NaN());
-  hw_encoder_errors_.resize(info_.joints.size(), std::numeric_limits<double>::quiet_NaN());
-  hw_controller_errors_.resize(info_.joints.size(), std::numeric_limits<double>::quiet_NaN());
-  hw_fet_temperatures_.resize(info_.joints.size(), std::numeric_limits<double>::quiet_NaN());
-  hw_motor_temperatures_.resize(info_.joints.size(), std::numeric_limits<double>::quiet_NaN());
-
-  for (const auto & sensor : hardware_config_.sensors) {
-    serial_numbers_[0].emplace_back(sensor.serial_number);
+  sensors_.clear();
+  sensors_.reserve(hardware_config_.sensors.size());
+  for (const auto & sensor_config : hardware_config_.sensors) {
+    SensorContext sensor;
+    sensor.serial_number = sensor_config.serial_number;
+    sensors_.emplace_back(sensor);
   }
 
-  for (const auto & joint : hardware_config_.joints) {
-    serial_numbers_[1].emplace_back(joint.serial_number);
-    axes_.emplace_back(joint.axis);
-    enable_watchdogs_.emplace_back(joint.enable_watchdog);
+  joints_.clear();
+  joints_.reserve(hardware_config_.joints.size());
+  for (const auto & joint_config : hardware_config_.joints) {
+    JointContext joint;
+    joint.serial_number = joint_config.serial_number;
+    joint.axis = joint_config.axis;
+    joint.enable_watchdog = joint_config.enable_watchdog;
+    joints_.emplace_back(joint);
   }
 
-  transport_ = std::make_unique<odrive::ODriveUSB>();
+  transport_ = transport_factory_ ? transport_factory_() : nullptr;
   if (!transport_) {
     RCLCPP_ERROR(
-      rclcpp::get_logger(kLoggerName), "Failed to create ODriveUSB instance");
+      rclcpp::get_logger(kLoggerName), "Failed to create ODrive transport instance");
     return CallbackReturn::ERROR;
   }
-  const auto init_status = transport_->initialize(serial_numbers_);
+
+  ODriveTransport::SerialMatrix serial_numbers(2);
+  serial_numbers[0].reserve(sensors_.size());
+  for (const auto & sensor : sensors_) {
+    serial_numbers[0].emplace_back(sensor.serial_number);
+  }
+  serial_numbers[1].reserve(joints_.size());
+  for (const auto & joint : joints_) {
+    serial_numbers[1].emplace_back(joint.serial_number);
+  }
+
+  const auto init_status = transport_->initialize(serial_numbers);
   if (init_status != 0) {
     return to_callback_return(init_status, "initialising ODrive transport");
   }
 
-  for (size_t i = 0; i < info_.joints.size(); i++) {
+  for (size_t i = 0; i < joints_.size(); i++) {
+    auto & joint_context = joints_[i];
     float torque_constant;
     const int read_status = transport_->read(
-      serial_numbers_[1][i],
-      axis_endpoint(odrive::AXIS__MOTOR__CONFIG__TORQUE_CONSTANT, axes_[i]), torque_constant);
+      joint_context.serial_number,
+      axis_endpoint(odrive::AXIS__MOTOR__CONFIG__TORQUE_CONSTANT, joint_context.axis),
+      torque_constant);
     if (read_status != 0) {
       return to_callback_return(read_status, "reading motor torque constant");
     }
-    torque_constants_.emplace_back(torque_constant);
+    joint_context.torque_constant = torque_constant;
 
-    if (enable_watchdogs_[i]) {
+    if (joint_context.enable_watchdog) {
       const int write_timeout_status = transport_->write(
-        serial_numbers_[1][i],
-        axis_endpoint(odrive::AXIS__CONFIG__WATCHDOG_TIMEOUT, axes_[i]),
+        joint_context.serial_number,
+        axis_endpoint(odrive::AXIS__CONFIG__WATCHDOG_TIMEOUT, joint_context.axis),
         static_cast<float>(hardware_config_.joints[i].watchdog_timeout));
       if (write_timeout_status != 0) {
         return to_callback_return(write_timeout_status, "configuring watchdog timeout");
       }
     }
     const int write_enable_status = transport_->write(
-      serial_numbers_[1][i],
-      axis_endpoint(odrive::AXIS__CONFIG__ENABLE_WATCHDOG, axes_[i]),
-      static_cast<bool>(enable_watchdogs_[i]));
+      joint_context.serial_number,
+      axis_endpoint(odrive::AXIS__CONFIG__ENABLE_WATCHDOG, joint_context.axis),
+      static_cast<bool>(joint_context.enable_watchdog));
     if (write_enable_status != 0) {
       return to_callback_return(write_enable_status, "enabling watchdog");
     }
   }
-
-  control_level_.resize(info_.joints.size(), AxisControlLevel::UNDEFINED);
   return CallbackReturn::SUCCESS;
 }
 
 CallbackReturn ODriveHardwareInterface::on_activate(const rclcpp_lifecycle::State &)
 {
-  for (size_t i = 0; i < info_.joints.size(); i++) {
-    const std::int64_t serial = serial_numbers_[1][i];
-    if (enable_watchdogs_[i]) {
+  for (auto & joint : joints_) {
+    if (joint.enable_watchdog) {
       const int feed_status = transport_->call(
-        serial, axis_endpoint(odrive::AXIS__WATCHDOG_FEED, axes_[i]));
+        joint.serial_number, axis_endpoint(odrive::AXIS__WATCHDOG_FEED, joint.axis));
       if (feed_status != 0) {
         return to_callback_return(feed_status, "feeding watchdog on activation");
       }
     }
     const int clear_status = transport_->call(
-      serial, axis_endpoint(odrive::AXIS__CLEAR_ERRORS, axes_[i]));
+      joint.serial_number, axis_endpoint(odrive::AXIS__CLEAR_ERRORS, joint.axis));
     if (clear_status != 0) {
       return to_callback_return(clear_status, "clearing axis errors on activation");
     }
@@ -170,10 +173,10 @@ CallbackReturn ODriveHardwareInterface::on_activate(const rclcpp_lifecycle::Stat
 
 CallbackReturn ODriveHardwareInterface::on_deactivate(const rclcpp_lifecycle::State &)
 {
-  int32_t requested_state = kAxisStateIdle;
-  for (size_t i = 0; i < info_.joints.size(); i++) {
+  constexpr std::int32_t requested_state = kAxisStateIdle;
+  for (const auto & joint : joints_) {
     const int status = transport_->write(
-      serial_numbers_[1][i], axis_endpoint(odrive::AXIS__REQUESTED_STATE, axes_[i]),
+      joint.serial_number, axis_endpoint(odrive::AXIS__REQUESTED_STATE, joint.axis),
       requested_state);
     if (status != 0) {
       return to_callback_return(status, "requesting axis idle state");
@@ -189,36 +192,37 @@ std::vector<hardware_interface::StateInterface> ODriveHardwareInterface::export_
   for (size_t i = 0; i < info_.sensors.size(); i++) {
     state_interfaces.emplace_back(
       hardware_interface::StateInterface(
-        info_.sensors[i].name, "vbus_voltage", &hw_vbus_voltages_[i]));
+        info_.sensors[i].name, "vbus_voltage", &sensors_[i].vbus_voltage));
   }
 
   for (size_t i = 0; i < info_.joints.size(); i++) {
     state_interfaces.emplace_back(
       hardware_interface::StateInterface(
-        info_.joints[i].name, hardware_interface::HW_IF_EFFORT, &hw_efforts_[i]));
+        info_.joints[i].name, hardware_interface::HW_IF_EFFORT, &joints_[i].effort));
     state_interfaces.emplace_back(
       hardware_interface::StateInterface(
-        info_.joints[i].name, hardware_interface::HW_IF_VELOCITY, &hw_velocities_[i]));
+        info_.joints[i].name, hardware_interface::HW_IF_VELOCITY, &joints_[i].velocity));
     state_interfaces.emplace_back(
       hardware_interface::StateInterface(
-        info_.joints[i].name, hardware_interface::HW_IF_POSITION, &hw_positions_[i]));
-    state_interfaces.emplace_back(
-      hardware_interface::StateInterface(info_.joints[i].name, "axis_error", &hw_axis_errors_[i]));
+        info_.joints[i].name, hardware_interface::HW_IF_POSITION, &joints_[i].position));
     state_interfaces.emplace_back(
       hardware_interface::StateInterface(
-        info_.joints[i].name, "motor_error", &hw_motor_errors_[i]));
+        info_.joints[i].name, "axis_error", &joints_[i].axis_error));
     state_interfaces.emplace_back(
       hardware_interface::StateInterface(
-        info_.joints[i].name, "encoder_error", &hw_encoder_errors_[i]));
+        info_.joints[i].name, "motor_error", &joints_[i].motor_error));
     state_interfaces.emplace_back(
       hardware_interface::StateInterface(
-        info_.joints[i].name, "controller_error", &hw_controller_errors_[i]));
+        info_.joints[i].name, "encoder_error", &joints_[i].encoder_error));
     state_interfaces.emplace_back(
       hardware_interface::StateInterface(
-        info_.joints[i].name, "fet_temperature", &hw_fet_temperatures_[i]));
+        info_.joints[i].name, "controller_error", &joints_[i].controller_error));
     state_interfaces.emplace_back(
       hardware_interface::StateInterface(
-        info_.joints[i].name, "motor_temperature", &hw_motor_temperatures_[i]));
+        info_.joints[i].name, "fet_temperature", &joints_[i].fet_temperature));
+    state_interfaces.emplace_back(
+      hardware_interface::StateInterface(
+        info_.joints[i].name, "motor_temperature", &joints_[i].motor_temperature));
   }
 
   return state_interfaces;
@@ -231,13 +235,13 @@ ODriveHardwareInterface::export_command_interfaces()
   for (size_t i = 0; i < info_.joints.size(); i++) {
     command_interfaces.emplace_back(
       hardware_interface::CommandInterface(
-        info_.joints[i].name, hardware_interface::HW_IF_EFFORT, &hw_commands_efforts_[i]));
+        info_.joints[i].name, hardware_interface::HW_IF_EFFORT, &joints_[i].command_effort));
     command_interfaces.emplace_back(
       hardware_interface::CommandInterface(
-        info_.joints[i].name, hardware_interface::HW_IF_VELOCITY, &hw_commands_velocities_[i]));
+        info_.joints[i].name, hardware_interface::HW_IF_VELOCITY, &joints_[i].command_velocity));
     command_interfaces.emplace_back(
       hardware_interface::CommandInterface(
-        info_.joints[i].name, hardware_interface::HW_IF_POSITION, &hw_commands_positions_[i]));
+        info_.joints[i].name, hardware_interface::HW_IF_POSITION, &joints_[i].command_position));
   }
 
   return command_interfaces;
@@ -250,27 +254,27 @@ return_type ODriveHardwareInterface::prepare_command_mode_switch(
   for (std::string key : stop_interfaces) {
     for (size_t i = 0; i < info_.joints.size(); i++) {
       if (key.find(info_.joints[i].name) != std::string::npos) {
-        control_level_[i] = AxisControlLevel::UNDEFINED;
+        joints_[i].control_level = AxisControlLevel::UNDEFINED;
       }
     }
   }
 
   for (std::string key : start_interfaces) {
     for (size_t i = 0; i < info_.joints.size(); i++) {
-      switch (control_level_[i]) {
+      switch (joints_[i].control_level) {
         case AxisControlLevel::UNDEFINED:
           if (key == info_.joints[i].name + "/" + hardware_interface::HW_IF_EFFORT) {
-            control_level_[i] = AxisControlLevel::EFFORT;
+            joints_[i].control_level = AxisControlLevel::EFFORT;
           }
           break;
         case AxisControlLevel::EFFORT:
           if (key == info_.joints[i].name + "/" + hardware_interface::HW_IF_VELOCITY) {
-            control_level_[i] = AxisControlLevel::VELOCITY;
+            joints_[i].control_level = AxisControlLevel::VELOCITY;
           }
           break;
         case AxisControlLevel::VELOCITY:
           if (key == info_.joints[i].name + "/" + hardware_interface::HW_IF_POSITION) {
-            control_level_[i] = AxisControlLevel::POSITION;
+            joints_[i].control_level = AxisControlLevel::POSITION;
           }
           break;
         case AxisControlLevel::POSITION:
@@ -287,15 +291,16 @@ return_type ODriveHardwareInterface::perform_command_mode_switch(
 {
   for (size_t i = 0; i < info_.joints.size(); i++) {
     AxisCommandState command_state{
-      hw_commands_positions_[i],
-      hw_commands_velocities_[i],
-      hw_commands_efforts_[i],
-      hw_positions_[i],
-      hw_velocities_[i],
-      hw_efforts_[i]};
+      joints_[i].command_position,
+      joints_[i].command_velocity,
+      joints_[i].command_effort,
+      joints_[i].position,
+      joints_[i].velocity,
+      joints_[i].effort};
     std::string failing_stage;
     if (const int status = perform_axis_mode_switch(
-        *transport_, serial_numbers_[1][i], axes_[i], control_level_[i], command_state,
+        *transport_, joints_[i].serial_number, joints_[i].axis, joints_[i].control_level,
+        command_state,
         failing_stage);
       status != 0)
     {
@@ -314,28 +319,29 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
     float vbus_voltage;
 
     if (const int status =
-      transport_->read(serial_numbers_[0][i], odrive::VBUS_VOLTAGE, vbus_voltage);
+      transport_->read(sensors_[i].serial_number, odrive::VBUS_VOLTAGE, vbus_voltage);
       status != 0)
     {
       return to_io_return(status, "reading vbus voltage");
     }
-    hw_vbus_voltages_[i] = vbus_voltage;
+    sensors_[i].vbus_voltage = vbus_voltage;
   }
 
   for (size_t i = 0; i < info_.joints.size(); i++) {
     AxisTelemetryBuffers buffers{
-      hw_efforts_[i],
-      hw_velocities_[i],
-      hw_positions_[i],
-      hw_axis_errors_[i],
-      hw_motor_errors_[i],
-      hw_encoder_errors_[i],
-      hw_controller_errors_[i],
-      hw_fet_temperatures_[i],
-      hw_motor_temperatures_[i]};
+      joints_[i].effort,
+      joints_[i].velocity,
+      joints_[i].position,
+      joints_[i].axis_error,
+      joints_[i].motor_error,
+      joints_[i].encoder_error,
+      joints_[i].controller_error,
+      joints_[i].fet_temperature,
+      joints_[i].motor_temperature};
     std::string failing_stage;
     if (const int status = read_axis_telemetry(
-        *transport_, serial_numbers_[1][i], axes_[i], torque_constants_[i], buffers,
+        *transport_, joints_[i].serial_number, joints_[i].axis, joints_[i].torque_constant,
+        buffers,
         failing_stage);
       status != 0)
     {
@@ -352,16 +358,16 @@ return_type ODriveHardwareInterface::write(const rclcpp::Time &, const rclcpp::D
 {
   for (size_t i = 0; i < info_.joints.size(); i++) {
     AxisCommandState command_state{
-      hw_commands_positions_[i],
-      hw_commands_velocities_[i],
-      hw_commands_efforts_[i],
-      hw_positions_[i],
-      hw_velocities_[i],
-      hw_efforts_[i]};
+      joints_[i].command_position,
+      joints_[i].command_velocity,
+      joints_[i].command_effort,
+      joints_[i].position,
+      joints_[i].velocity,
+      joints_[i].effort};
     std::string failing_stage;
     if (const int status = write_axis_command(
-        *transport_, serial_numbers_[1][i], axes_[i], control_level_[i], command_state,
-        enable_watchdogs_[i], failing_stage);
+        *transport_, joints_[i].serial_number, joints_[i].axis, joints_[i].control_level,
+        command_state, joints_[i].enable_watchdog, failing_stage);
       status != 0)
     {
       std::string action = failing_stage.empty() ? "writing axis command" :

@@ -21,6 +21,11 @@ namespace odrive_hardware_interface
 namespace
 {
 constexpr double kRadiansToTurns = 1.0 / (2.0 * M_PI);
+
+inline float radians_to_turns(double value)
+{
+  return static_cast<float>(value * kRadiansToTurns);
+}
 }
 
 int perform_axis_mode_switch(
@@ -31,99 +36,107 @@ int perform_axis_mode_switch(
   AxisCommandState command_state,
   std::string & failing_stage)
 {
+  const auto write_axis_value = [&](const char * stage, std::int16_t endpoint, auto value) -> int {
+      failing_stage = stage;
+      if (const int status = transport.write(
+          serial_number,
+          axis_endpoint(endpoint, axis),
+          value);
+        status != 0)
+      {
+        return status;
+      }
+      return 0;
+    };
+
   switch (level) {
     case AxisControlLevel::UNDEFINED: {
-        failing_stage = "requesting idle state";
-        const std::int32_t requested_state = kAxisStateIdle;
-        const int status = transport.write(
-          serial_number,
-          axis_endpoint(odrive::AXIS__REQUESTED_STATE, axis),
-          requested_state);
+        if (const int status = write_axis_value(
+            "requesting idle state",
+            odrive::AXIS__REQUESTED_STATE,
+            static_cast<std::int32_t>(kAxisStateIdle));
+          status != 0)
+        {
+          return status;
+        }
         failing_stage.clear();
-        return status;
+        return 0;
       }
 
     case AxisControlLevel::EFFORT: {
         command_state.command_effort = command_state.state_effort;
 
-        failing_stage = "setting controller to torque mode";
-        const auto control_mode = static_cast<std::int32_t>(level);
-        if (const int status = transport.write(
-            serial_number,
-            axis_endpoint(odrive::AXIS__CONTROLLER__CONFIG__CONTROL_MODE, axis),
-            control_mode);
+        if (const int status = write_axis_value(
+            "setting controller to torque mode",
+            odrive::AXIS__CONTROLLER__CONFIG__CONTROL_MODE,
+            static_cast<std::int32_t>(level));
           status != 0)
         {
           return status;
         }
 
-        failing_stage = "priming torque setpoint";
-        const float input_torque = static_cast<float>(command_state.command_effort);
-        if (const int status = transport.write(
-            serial_number,
-            axis_endpoint(odrive::AXIS__CONTROLLER__INPUT_TORQUE, axis),
-            input_torque);
+        if (const int status = write_axis_value(
+            "priming torque setpoint",
+            odrive::AXIS__CONTROLLER__INPUT_TORQUE,
+            static_cast<float>(command_state.command_effort));
           status != 0)
         {
           return status;
         }
 
-        failing_stage = "entering closed loop (torque)";
-        const std::int32_t requested_state = kAxisStateClosedLoopControl;
-        const int status = transport.write(
-          serial_number,
-          axis_endpoint(odrive::AXIS__REQUESTED_STATE, axis),
-          requested_state);
+        if (const int status = write_axis_value(
+            "entering closed loop (torque)",
+            odrive::AXIS__REQUESTED_STATE,
+            static_cast<std::int32_t>(kAxisStateClosedLoopControl));
+          status != 0)
+        {
+          return status;
+        }
         failing_stage.clear();
-        return status;
+        return 0;
       }
 
     case AxisControlLevel::VELOCITY: {
         command_state.command_velocity = command_state.state_velocity;
         command_state.command_effort = 0.0;
 
-        failing_stage = "setting controller to velocity mode";
-        const auto control_mode = static_cast<std::int32_t>(level);
-        if (const int status = transport.write(
-            serial_number,
-            axis_endpoint(odrive::AXIS__CONTROLLER__CONFIG__CONTROL_MODE, axis),
-            control_mode);
+        if (const int status = write_axis_value(
+            "setting controller to velocity mode",
+            odrive::AXIS__CONTROLLER__CONFIG__CONTROL_MODE,
+            static_cast<std::int32_t>(level));
           status != 0)
         {
           return status;
         }
 
-        failing_stage = "priming velocity setpoint";
-        const float input_vel =
-          static_cast<float>(command_state.command_velocity * kRadiansToTurns);
-        if (const int status = transport.write(
-            serial_number,
-            axis_endpoint(odrive::AXIS__CONTROLLER__INPUT_VEL, axis),
-            input_vel);
+        if (const int status = write_axis_value(
+            "priming velocity setpoint",
+            odrive::AXIS__CONTROLLER__INPUT_VEL,
+            radians_to_turns(command_state.command_velocity));
           status != 0)
         {
           return status;
         }
 
-        failing_stage = "priming torque feed-forward";
-        const float input_torque = static_cast<float>(command_state.command_effort);
-        if (const int status = transport.write(
-            serial_number,
-            axis_endpoint(odrive::AXIS__CONTROLLER__INPUT_TORQUE, axis),
-            input_torque);
+        if (const int status = write_axis_value(
+            "priming torque feed-forward",
+            odrive::AXIS__CONTROLLER__INPUT_TORQUE,
+            static_cast<float>(command_state.command_effort));
           status != 0)
         {
           return status;
         }
 
-        failing_stage = "entering closed loop (velocity)";
-        const std::int32_t requested_state = kAxisStateClosedLoopControl;
-        const int status = transport.write(
-          serial_number,
-          axis_endpoint(odrive::AXIS__REQUESTED_STATE, axis),
-          requested_state);
+        if (const int status = write_axis_value(
+            "entering closed loop (velocity)",
+            odrive::AXIS__REQUESTED_STATE,
+            static_cast<std::int32_t>(kAxisStateClosedLoopControl));
+          status != 0)
+        {
+          return status;
+        }
         failing_stage.clear();
-        return status;
+        return 0;
       }
 
     case AxisControlLevel::POSITION: {
@@ -131,60 +144,52 @@ int perform_axis_mode_switch(
         command_state.command_velocity = 0.0;
         command_state.command_effort = 0.0;
 
-        failing_stage = "setting controller to position mode";
-        const auto control_mode = static_cast<std::int32_t>(level);
-        if (const int status = transport.write(
-            serial_number,
-            axis_endpoint(odrive::AXIS__CONTROLLER__CONFIG__CONTROL_MODE, axis),
-            control_mode);
+        if (const int status = write_axis_value(
+            "setting controller to position mode",
+            odrive::AXIS__CONTROLLER__CONFIG__CONTROL_MODE,
+            static_cast<std::int32_t>(level));
           status != 0)
         {
           return status;
         }
 
-        failing_stage = "priming position setpoint";
-        const float input_pos =
-          static_cast<float>(command_state.command_position * kRadiansToTurns);
-        if (const int status = transport.write(
-            serial_number,
-            axis_endpoint(odrive::AXIS__CONTROLLER__INPUT_POS, axis),
-            input_pos);
+        if (const int status = write_axis_value(
+            "priming position setpoint",
+            odrive::AXIS__CONTROLLER__INPUT_POS,
+            radians_to_turns(command_state.command_position));
           status != 0)
         {
           return status;
         }
 
-        failing_stage = "priming velocity limit";
-        const float input_vel =
-          static_cast<float>(command_state.command_velocity * kRadiansToTurns);
-        if (const int status = transport.write(
-            serial_number,
-            axis_endpoint(odrive::AXIS__CONTROLLER__INPUT_VEL, axis),
-            input_vel);
+        if (const int status = write_axis_value(
+            "priming velocity limit",
+            odrive::AXIS__CONTROLLER__INPUT_VEL,
+            radians_to_turns(command_state.command_velocity));
           status != 0)
         {
           return status;
         }
 
-        failing_stage = "priming torque limit";
-        const float input_torque = static_cast<float>(command_state.command_effort);
-        if (const int status = transport.write(
-            serial_number,
-            axis_endpoint(odrive::AXIS__CONTROLLER__INPUT_TORQUE, axis),
-            input_torque);
+        if (const int status = write_axis_value(
+            "priming torque limit",
+            odrive::AXIS__CONTROLLER__INPUT_TORQUE,
+            static_cast<float>(command_state.command_effort));
           status != 0)
         {
           return status;
         }
 
-        failing_stage = "entering closed loop (position)";
-        const std::int32_t requested_state = kAxisStateClosedLoopControl;
-        const int status = transport.write(
-          serial_number,
-          axis_endpoint(odrive::AXIS__REQUESTED_STATE, axis),
-          requested_state);
+        if (const int status = write_axis_value(
+            "entering closed loop (position)",
+            odrive::AXIS__REQUESTED_STATE,
+            static_cast<std::int32_t>(kAxisStateClosedLoopControl));
+          status != 0)
+        {
+          return status;
+        }
         failing_stage.clear();
-        return status;
+        return 0;
       }
   }
 
@@ -201,38 +206,54 @@ int write_axis_command(
   bool enable_watchdog,
   std::string & failing_stage)
 {
+  const auto write_axis_value = [&](const char * stage, std::int16_t endpoint, auto value) -> int {
+      failing_stage = stage;
+      if (const int status = transport.write(
+          serial_number,
+          axis_endpoint(endpoint, axis),
+          value);
+        status != 0)
+      {
+        return status;
+      }
+      return 0;
+    };
+
+  const auto call_axis = [&](const char * stage, std::int16_t endpoint) -> int {
+      failing_stage = stage;
+      const int status = transport.call(
+        serial_number,
+        axis_endpoint(endpoint, axis));
+      if (status != 0) {
+        return status;
+      }
+      return 0;
+    };
+
   switch (level) {
     case AxisControlLevel::POSITION: {
-        failing_stage = "writing position command";
-        const float input_pos =
-          static_cast<float>(command_state.command_position * kRadiansToTurns);
-        if (const int status = transport.write(
-            serial_number,
-            axis_endpoint(odrive::AXIS__CONTROLLER__INPUT_POS, axis),
-            input_pos);
+        if (const int status = write_axis_value(
+            "writing position command",
+            odrive::AXIS__CONTROLLER__INPUT_POS,
+            radians_to_turns(command_state.command_position));
           status != 0)
         {
           return status;
         }
 
-        failing_stage = "writing velocity command";
-        const float input_vel =
-          static_cast<float>(command_state.command_velocity * kRadiansToTurns);
-        if (const int status = transport.write(
-            serial_number,
-            axis_endpoint(odrive::AXIS__CONTROLLER__INPUT_VEL, axis),
-            input_vel);
+        if (const int status = write_axis_value(
+            "writing velocity command",
+            odrive::AXIS__CONTROLLER__INPUT_VEL,
+            radians_to_turns(command_state.command_velocity));
           status != 0)
         {
           return status;
         }
 
-        failing_stage = "writing torque command";
-        const float input_torque = static_cast<float>(command_state.command_effort);
-        if (const int status = transport.write(
-            serial_number,
-            axis_endpoint(odrive::AXIS__CONTROLLER__INPUT_TORQUE, axis),
-            input_torque);
+        if (const int status = write_axis_value(
+            "writing torque command",
+            odrive::AXIS__CONTROLLER__INPUT_TORQUE,
+            static_cast<float>(command_state.command_effort));
           status != 0)
         {
           return status;
@@ -242,24 +263,19 @@ int write_axis_command(
       }
 
     case AxisControlLevel::VELOCITY: {
-        failing_stage = "writing velocity command";
-        const float input_vel =
-          static_cast<float>(command_state.command_velocity * kRadiansToTurns);
-        if (const int status = transport.write(
-            serial_number,
-            axis_endpoint(odrive::AXIS__CONTROLLER__INPUT_VEL, axis),
-            input_vel);
+        if (const int status = write_axis_value(
+            "writing velocity command",
+            odrive::AXIS__CONTROLLER__INPUT_VEL,
+            radians_to_turns(command_state.command_velocity));
           status != 0)
         {
           return status;
         }
 
-        failing_stage = "writing torque command";
-        const float input_torque = static_cast<float>(command_state.command_effort);
-        if (const int status = transport.write(
-            serial_number,
-            axis_endpoint(odrive::AXIS__CONTROLLER__INPUT_TORQUE, axis),
-            input_torque);
+        if (const int status = write_axis_value(
+            "writing torque command",
+            odrive::AXIS__CONTROLLER__INPUT_TORQUE,
+            static_cast<float>(command_state.command_effort));
           status != 0)
         {
           return status;
@@ -269,22 +285,17 @@ int write_axis_command(
       }
 
     case AxisControlLevel::EFFORT: {
-        failing_stage = "writing torque command";
-        const float input_torque = static_cast<float>(command_state.command_effort);
-        const int status = transport.write(
-          serial_number,
-          axis_endpoint(odrive::AXIS__CONTROLLER__INPUT_TORQUE, axis),
-          input_torque);
+        const int status = write_axis_value(
+          "writing torque command",
+          odrive::AXIS__CONTROLLER__INPUT_TORQUE,
+          static_cast<float>(command_state.command_effort));
         failing_stage.clear();
         return status;
       }
 
     case AxisControlLevel::UNDEFINED: {
         if (enable_watchdog) {
-          failing_stage = "feeding watchdog";
-          const int status = transport.call(
-            serial_number,
-            axis_endpoint(odrive::AXIS__WATCHDOG_FEED, axis));
+          const int status = call_axis("feeding watchdog", odrive::AXIS__WATCHDOG_FEED);
           failing_stage.clear();
           return status;
         }

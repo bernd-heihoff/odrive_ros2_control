@@ -17,6 +17,8 @@
 #include <cstdint>
 #include <utility>
 
+#include "rclcpp/rclcpp.hpp"
+
 namespace odrive
 {
 namespace
@@ -24,6 +26,7 @@ namespace
 constexpr unsigned int kUsbTimeoutMs = 100;
 constexpr std::uint16_t kMsbMask = 0x8000u;
 constexpr std::uint16_t kSequenceMask = 0x7fffu;
+const rclcpp::Logger kUsbLogger = rclcpp::get_logger("ODriveUSB");
 }  // namespace
 
 ODriveUSB::ODriveUSB()
@@ -111,7 +114,9 @@ int ODriveUSB::initialize(const SerialMatrix & serial_numbers)
   if (odrive_map_.size() == 1U) {
     auto it = odrive_map_.begin();
     odrive_map_.insert(std::pair<std::int64_t, libusb_device_handle *>(-it->first, it->second));
-    std::cout << "Connected to ODrive " << std::hex << -it->first << std::endl;
+    RCLCPP_INFO(
+      kUsbLogger, "Connected to ODrive {:#x}",
+      static_cast<std::uint64_t>(-it->first));
     odrive_map_.erase(it);
   } else {
     for (std::size_t i = 0; i < serial_numbers.size(); ++i) {
@@ -123,7 +128,9 @@ int ODriveUSB::initialize(const SerialMatrix & serial_numbers)
             odrive_map_.insert(
               std::pair<std::int64_t, libusb_device_handle *>(
                 -lookup->first, lookup->second));
-            std::cout << "Connected to ODrive " << std::hex << -lookup->first << std::endl;
+            RCLCPP_INFO(
+              kUsbLogger, "Connected to ODrive {:#x}",
+              static_cast<std::uint64_t>(-lookup->first));
             odrive_map_.erase(lookup);
           } else {
             return LIBUSB_ERROR_NO_DEVICE;
@@ -158,14 +165,18 @@ int ODriveUSB::read(libusb_device_handle * odrive_handle, std::int16_t endpoint_
     odrive_handle, endpoint_id, static_cast<std::int16_t>(sizeof(T)), request_payload,
     response_payload, true);
   if (ret != LIBUSB_SUCCESS) {
-    std::cerr << "Endpoint read error (endpoint " << endpoint_id << "): "
-              << libusb_error_name(ret) << std::endl;
+    RCLCPP_ERROR(
+      kUsbLogger, "Endpoint read error (endpoint {}): {}", endpoint_id,
+      libusb_error_name(ret));
     return ret;
   }
   if (response_payload.size() < sizeof(T)) {
-    std::cerr << "Error on endpoint " << endpoint_id << ": received payload size ("
-              << response_payload.size() << ") less than expected (" << sizeof(T) << ")"
-              << std::endl;
+    RCLCPP_ERROR(
+      kUsbLogger,
+      "Endpoint {}: received payload size {} less than expected {}",
+      endpoint_id,
+      response_payload.size(),
+      sizeof(T));
     return LIBUSB_ERROR_IO;
   }
   std::memcpy(&value, response_payload.data(), sizeof(T));
@@ -225,9 +236,12 @@ int ODriveUSB::endpointOperation(
     odrive_handle, ODRIVE_OUT_ENDPOINT, request_packet.data(), request_packet.size(), &transferred,
     kUsbTimeoutMs);
   if (ret != LIBUSB_SUCCESS) {
-    std::cerr << "Bulk transfer failed on OUT endpoint (seq: " << sequence_number
-              << ", endpoint: " << effective_endpoint << "): " << libusb_error_name(ret)
-              << std::endl;
+    RCLCPP_ERROR(
+      kUsbLogger,
+      "Bulk transfer failed on OUT endpoint (seq: {}, endpoint: {}): {}",
+      sequence_number,
+      effective_endpoint,
+      libusb_error_name(ret));
     return ret;
   }
 
@@ -236,16 +250,22 @@ int ODriveUSB::endpointOperation(
       odrive_handle, ODRIVE_IN_ENDPOINT, response_data, ODRIVE_MAX_PACKET_SIZE, &transferred,
       kUsbTimeoutMs);
     if (ret != LIBUSB_SUCCESS) {
-      std::cerr << "Bulk transfer failed on IN endpoint (seq: " << sequence_number
-                << ", endpoint: " << effective_endpoint << "): " << libusb_error_name(ret)
-                << std::endl;
+      RCLCPP_ERROR(
+        kUsbLogger,
+        "Bulk transfer failed on IN endpoint (seq: {}, endpoint: {}): {}",
+        sequence_number,
+        effective_endpoint,
+        libusb_error_name(ret));
       return ret;
     }
     if (transferred < response_size) {
-      std::cerr << "Warning (seq: " << sequence_number << ", endpoint: " << effective_endpoint
-                << "): Transferred (" << transferred
-                << ") bytes is less than expected response size (" << response_size << ")"
-                << std::endl;
+      RCLCPP_WARN(
+        kUsbLogger,
+        "Bulk transfer (seq: {}, endpoint: {}): transferred {} bytes, expected {}",
+        sequence_number,
+        effective_endpoint,
+        transferred,
+        response_size);
       return LIBUSB_ERROR_IO;
     }
     for (int i = 0; i < transferred; ++i) {
