@@ -22,7 +22,7 @@
 namespace odrive_hardware_interface
 {
 /// Validate the current joint command against configured limits and active control level.
-///\returns true when the command is acceptable. On failure, \p reason contains a description.
+/// \returns true when the command is acceptable. On failure, \p reason contains a description.
 bool validate_joint_command(
   const JointConfig::CommandLimits & limits,
   AxisControlLevel level,

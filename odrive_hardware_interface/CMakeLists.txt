@@ -6,10 +6,11 @@ if(NOT CMAKE_C_STANDARD)
   set(CMAKE_C_STANDARD 99)
 endif()
 
-# Default to C++14
+# Default to C++17
 if(NOT CMAKE_CXX_STANDARD)
-  set(CMAKE_CXX_STANDARD 14)
+  set(CMAKE_CXX_STANDARD 17)
 endif()
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic -Wno-implicit-fallthrough)
@@ -52,7 +53,9 @@ pluginlib_export_plugin_description_file(hardware_interface odrive_hardware_inte
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
   list(APPEND AMENT_LINT_AUTO_FILE_EXCLUDE
-    "include/odrive_hardware_interface/odrive_endpoints.hpp")
+    "include/odrive_hardware_interface/odrive_endpoints.hpp"
+    "include/odrive_hardware_interface/install/_local_setup_util_ps1.py"
+    "include/odrive_hardware_interface/install/_local_setup_util_sh.py")
   find_package(ament_cmake_gtest REQUIRED)
   # the following line skips the linter which checks for copyrights
   # uncomment the line when a copyright and license is not present in all source files

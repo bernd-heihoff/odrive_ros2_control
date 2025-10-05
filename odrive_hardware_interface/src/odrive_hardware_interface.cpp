@@ -336,35 +336,66 @@ return_type ODriveHardwareInterface::prepare_command_mode_switch(
   const std::vector<std::string> & start_interfaces,
   const std::vector<std::string> & stop_interfaces)
 {
-  for (std::string key : stop_interfaces) {
-    for (size_t i = 0; i < info_.joints.size(); i++) {
-      if (key.find(info_.joints[i].name) != std::string::npos) {
-        joints_[i].control_level = AxisControlLevel::UNDEFINED;
+  const auto parse_interface_key = [](const std::string & key)
+    -> std::pair<std::string, std::string> {
+      const auto separator = key.find('/');
+      if (separator == std::string::npos) {
+        return {"", ""};
       }
+      return {key.substr(0, separator), key.substr(separator + 1)};
+    };
+
+  const auto find_joint_index = [&](const std::string & joint_name) -> std::size_t {
+      for (std::size_t i = 0; i < info_.joints.size(); ++i) {
+        if (info_.joints[i].name == joint_name) {
+          return i;
+        }
+      }
+      return info_.joints.size();
+    };
+
+  for (const auto & key : stop_interfaces) {
+    const auto [joint_name, interface_name] = parse_interface_key(key);
+    (void)interface_name;
+    const auto index = find_joint_index(joint_name);
+    if (index < joints_.size()) {
+      joints_[index].control_level = AxisControlLevel::UNDEFINED;
     }
   }
 
-  for (std::string key : start_interfaces) {
-    for (size_t i = 0; i < info_.joints.size(); i++) {
-      switch (joints_[i].control_level) {
-        case AxisControlLevel::UNDEFINED:
-          if (key == info_.joints[i].name + "/" + hardware_interface::HW_IF_EFFORT) {
-            joints_[i].control_level = AxisControlLevel::EFFORT;
-          }
-          break;
-        case AxisControlLevel::EFFORT:
-          if (key == info_.joints[i].name + "/" + hardware_interface::HW_IF_VELOCITY) {
-            joints_[i].control_level = AxisControlLevel::VELOCITY;
-          }
-          break;
-        case AxisControlLevel::VELOCITY:
-          if (key == info_.joints[i].name + "/" + hardware_interface::HW_IF_POSITION) {
-            joints_[i].control_level = AxisControlLevel::POSITION;
-          }
-          break;
-        case AxisControlLevel::POSITION:
-          break;
-      }
+  struct RequestedModes
+  {
+    bool effort{false};
+    bool velocity{false};
+    bool position{false};
+  };
+
+  std::vector<RequestedModes> requested_modes(joints_.size());
+
+  for (const auto & key : start_interfaces) {
+    const auto [joint_name, interface_name] = parse_interface_key(key);
+    const auto index = find_joint_index(joint_name);
+    if (index >= joints_.size()) {
+      continue;
+    }
+
+    if (interface_name == hardware_interface::HW_IF_POSITION) {
+      requested_modes[index].position = true;
+    } else if (interface_name == hardware_interface::HW_IF_VELOCITY) {
+      requested_modes[index].velocity = true;
+    } else if (interface_name == hardware_interface::HW_IF_EFFORT) {
+      requested_modes[index].effort = true;
+    }
+  }
+
+  for (std::size_t i = 0; i < joints_.size(); ++i) {
+    const auto & request = requested_modes[i];
+    if (request.position) {
+      joints_[i].control_level = AxisControlLevel::POSITION;
+    } else if (request.velocity) {
+      joints_[i].control_level = AxisControlLevel::VELOCITY;
+    } else if (request.effort) {
+      joints_[i].control_level = AxisControlLevel::EFFORT;
     }
   }
 
