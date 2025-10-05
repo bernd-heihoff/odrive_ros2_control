@@ -14,19 +14,8 @@
 
 #include "odrive_hardware_interface/axis_control.hpp"
 
-#include <cmath>
-
 namespace odrive_hardware_interface
 {
-namespace
-{
-constexpr double kRadiansToTurns = 1.0 / (2.0 * M_PI);
-
-inline float radians_to_turns(double value)
-{
-  return static_cast<float>(value * kRadiansToTurns);
-}
-}
 
 int perform_axis_mode_switch(
   ODriveTransport & transport,
@@ -112,7 +101,7 @@ int perform_axis_mode_switch(
         if (const int status = write_axis_value(
             "priming velocity setpoint",
             odrive::AXIS__CONTROLLER__INPUT_VEL,
-            radians_to_turns(command_state.command_velocity));
+            static_cast<float>(radians_to_turns(command_state.command_velocity)));
           status != 0)
         {
           return status;
@@ -156,7 +145,7 @@ int perform_axis_mode_switch(
         if (const int status = write_axis_value(
             "priming position setpoint",
             odrive::AXIS__CONTROLLER__INPUT_POS,
-            radians_to_turns(command_state.command_position));
+            static_cast<float>(radians_to_turns(command_state.command_position)));
           status != 0)
         {
           return status;
@@ -165,7 +154,7 @@ int perform_axis_mode_switch(
         if (const int status = write_axis_value(
             "priming velocity limit",
             odrive::AXIS__CONTROLLER__INPUT_VEL,
-            radians_to_turns(command_state.command_velocity));
+            static_cast<float>(radians_to_turns(command_state.command_velocity)));
           status != 0)
         {
           return status;
@@ -235,7 +224,7 @@ int write_axis_command(
         if (const int status = write_axis_value(
             "writing position command",
             odrive::AXIS__CONTROLLER__INPUT_POS,
-            radians_to_turns(command_state.command_position));
+            static_cast<float>(radians_to_turns(command_state.command_position)));
           status != 0)
         {
           return status;
@@ -244,7 +233,7 @@ int write_axis_command(
         if (const int status = write_axis_value(
             "writing velocity command",
             odrive::AXIS__CONTROLLER__INPUT_VEL,
-            radians_to_turns(command_state.command_velocity));
+            static_cast<float>(radians_to_turns(command_state.command_velocity)));
           status != 0)
         {
           return status;
@@ -266,7 +255,7 @@ int write_axis_command(
         if (const int status = write_axis_value(
             "writing velocity command",
             odrive::AXIS__CONTROLLER__INPUT_VEL,
-            radians_to_turns(command_state.command_velocity));
+            static_cast<float>(radians_to_turns(command_state.command_velocity)));
           status != 0)
         {
           return status;

@@ -22,11 +22,6 @@
 
 namespace odrive_hardware_interface
 {
-namespace
-{
-constexpr double kTurnsToRadians = 2.0 * M_PI;
-}
-
 int read_axis_telemetry(
   ODriveTransport & transport,
   std::int64_t serial_number,
@@ -57,7 +52,7 @@ int read_axis_telemetry(
   {
     return status;
   }
-  buffers.velocity = static_cast<double>(vel_estimate * kTurnsToRadians);
+  buffers.velocity = static_cast<double>(turns_to_radians(vel_estimate));
 
   float pos_estimate = 0.0F;
   failing_stage = "reading position estimate";
@@ -69,7 +64,7 @@ int read_axis_telemetry(
   {
     return status;
   }
-  buffers.position = static_cast<double>(pos_estimate * kTurnsToRadians);
+  buffers.position = static_cast<double>(turns_to_radians(pos_estimate));
 
   int32_t axis_error = 0;
   failing_stage = "reading axis error";
