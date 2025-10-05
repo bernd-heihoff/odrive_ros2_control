@@ -292,5 +292,107 @@ TEST(CommandSafetyTest, AcceptsCommandsWithinLimits)
   EXPECT_EQ(return_type::OK, interface.write(rclcpp::Time{}, rclcpp::Duration(0, 0)));
   EXPECT_TRUE(transport->expectations_satisfied());
 }
+
+TEST(CommandSafetyTest, ReportsErrorWhenTransportFailsDuringWrite)
+{
+  ODriveHardwareInterface interface;
+  const std::int64_t serial = 0x00000000000000D1LL;
+  const int axis = 1;
+  const float torque_constant = 5.0F;
+  MockTransport * transport = nullptr;
+
+  interface.set_transport_factory(
+    [&]() {
+      auto instance = std::make_unique<MockTransport>();
+      transport = instance.get();
+      instance->expect_read(
+        serial,
+        axis_endpoint(odrive::AXIS__MOTOR__CONFIG__TORQUE_CONSTANT, axis),
+        torque_constant);
+      instance->expect_write(
+        serial,
+        axis_endpoint(odrive::AXIS__CONFIG__ENABLE_WATCHDOG, axis),
+        static_cast<bool>(false));
+      return instance;
+    });
+
+  hardware_interface::HardwareInfo info;
+
+  hardware_interface::ComponentInfo sensor;
+  sensor.name = "bus";
+  sensor.parameters["serial_number"] = "d1";
+  info.sensors.push_back(sensor);
+
+  hardware_interface::ComponentInfo joint;
+  joint.name = "wheel";
+  joint.parameters["serial_number"] = "d1";
+  joint.parameters["axis"] = "1";
+  joint.parameters["watchdog_timeout"] = "0.10";
+  joint.parameters["enable_watchdog"] = "false";
+  info.joints.push_back(joint);
+
+  ASSERT_EQ(CallbackReturn::SUCCESS, interface.on_init(info));
+  ASSERT_NE(nullptr, transport);
+  EXPECT_TRUE(transport->expectations_satisfied());
+
+  auto command_interfaces = interface.export_command_interfaces();
+  auto set_command = [&](const std::string & interface_name, double value) {
+      for (auto & command : command_interfaces) {
+        if (command.get_prefix_name() == "wheel" &&
+          command.get_interface_name() == interface_name)
+        {
+          command.set_value(value);
+          return;
+        }
+      }
+      ADD_FAILURE() << "Failed to locate command interface wheel/" << interface_name;
+    };
+
+  const double position = 0.25;
+  const double velocity = 0.0;
+  const double effort = 0.0;
+
+  set_command(hardware_interface::HW_IF_POSITION, position);
+  set_command(hardware_interface::HW_IF_VELOCITY, velocity);
+  set_command(hardware_interface::HW_IF_EFFORT, effort);
+
+  EXPECT_EQ(
+    return_type::OK,
+    interface.prepare_command_mode_switch(
+      {"wheel/" + std::string(hardware_interface::HW_IF_EFFORT)},
+      {}));
+  EXPECT_EQ(
+    return_type::OK,
+    interface.prepare_command_mode_switch(
+      {"wheel/" + std::string(hardware_interface::HW_IF_VELOCITY)},
+      {}));
+  EXPECT_EQ(
+    return_type::OK,
+    interface.prepare_command_mode_switch(
+      {"wheel/" + std::string(hardware_interface::HW_IF_POSITION)},
+      {}));
+
+  constexpr int kUsbNoDevice = -4;
+  const auto position_endpoint = axis_endpoint(odrive::AXIS__CONTROLLER__INPUT_POS, axis);
+  const auto velocity_endpoint = axis_endpoint(odrive::AXIS__CONTROLLER__INPUT_VEL, axis);
+  const auto torque_endpoint = axis_endpoint(odrive::AXIS__CONTROLLER__INPUT_TORQUE, axis);
+
+  transport->expect_write(
+    serial,
+    position_endpoint,
+    static_cast<float>(position / (2.0 * M_PI)),
+    kUsbNoDevice);
+  transport->expect_write(
+    serial,
+    velocity_endpoint,
+    static_cast<float>(velocity / (2.0 * M_PI)));
+  transport->expect_write(
+    serial,
+    torque_endpoint,
+    static_cast<float>(effort));
+
+  EXPECT_EQ(return_type::ERROR, interface.write(rclcpp::Time{}, rclcpp::Duration(0, 0)));
+  EXPECT_EQ(2U, transport->pending_writes());
+}
 }  // namespace
 }  // namespace odrive_hardware_interface
