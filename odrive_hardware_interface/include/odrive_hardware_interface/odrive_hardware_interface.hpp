@@ -16,35 +16,17 @@
 
 #include <cmath>
 #include <memory>
+#include <string>
+#include <vector>
 
 #include "hardware_interface/system_interface.hpp"
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
-#include "odrive_hardware_interface/odrive_usb.hpp"
+#include "odrive_hardware_interface/axis_control.hpp"
+#include "odrive_hardware_interface/odrive_configuration.hpp"
+#include "odrive_hardware_interface/odrive_transport.hpp"
 #include "odrive_hardware_interface/visibility_control.hpp"
 #include "rclcpp/rclcpp.hpp"
 
-#define AXIS_STATE_IDLE 1
-#define AXIS_STATE_CLOSED_LOOP_CONTROL 8
-
-#define CHECK_TS(status)                                                                   \
-  do {                                                                                     \
-    int ret = (status);                                                                    \
-    if (ret != 0) {                                                                        \
-      RCLCPP_ERROR(rclcpp::get_logger("ODriveHardwareInterface"), libusb_error_name(ret)); \
-      return CallbackReturn::ERROR;                                                        \
-    }                                                                                      \
-  } while (0)
-
-#define CHECK_RW(status)                                                                   \
-  do {                                                                                     \
-    int ret = (status);                                                                    \
-    if (ret != 0) {                                                                        \
-      RCLCPP_ERROR(rclcpp::get_logger("ODriveHardwareInterface"), libusb_error_name(ret)); \
-      return return_type::ERROR;                                                           \
-    }                                                                                      \
-  } while (0)
-
-using namespace odrive;
 using hardware_interface::CallbackReturn;
 using hardware_interface::return_type;
 
@@ -86,8 +68,8 @@ public:
   return_type write(const rclcpp::Time &, const rclcpp::Duration &) override;
 
 private:
-  // Replace raw pointer with a unique_ptr for automatic cleanup.
-  std::unique_ptr<ODriveUSB> odrive;
+  HardwareConfiguration hardware_config_;
+  std::unique_ptr<ODriveTransport> transport_;
 
   std::vector<std::vector<int64_t>> serial_numbers_;
   std::vector<int> axes_;
@@ -110,14 +92,6 @@ private:
   std::vector<double> hw_fet_temperatures_;
   std::vector<double> hw_motor_temperatures_;
 
-  enum class integration_level_t : int32_t
-  {
-    UNDEFINED = 0,
-    EFFORT = 1,
-    VELOCITY = 2,
-    POSITION = 3
-  };
-
-  std::vector<integration_level_t> control_level_;
+  std::vector<AxisControlLevel> control_level_;
 };
 }  // namespace odrive_hardware_interface

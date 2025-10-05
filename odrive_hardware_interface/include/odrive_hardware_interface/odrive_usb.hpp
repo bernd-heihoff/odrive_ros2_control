@@ -16,12 +16,14 @@
 
 #include <libusb-1.0/libusb.h>
 
+#include <cstdint>
 #include <cstring>
 #include <iostream>
 #include <map>
 #include <vector>
 
 #include "odrive_hardware_interface/odrive_endpoints.hpp"
+#include "odrive_hardware_interface/odrive_transport.hpp"
 
 #define ODRIVE_USB_VENDORID 0x1209
 #define ODRIVE_USB_PRODUCTID 0x0d32
@@ -32,43 +34,47 @@
 #define ODRIVE_PROTOCOL_VERSION 1
 #define ODRIVE_MAX_PACKET_SIZE 16
 
-typedef std::vector<uint8_t> bytes;
+using bytes = std::vector<uint8_t>;
 
 namespace odrive
 {
-class ODriveUSB
+class ODriveUSB : public odrive_hardware_interface::ODriveTransport
 {
 public:
   ODriveUSB();
   ~ODriveUSB();
 
-  int init(const std::vector<std::vector<int64_t>> & serial_numbers);
-
-  template <typename T>
-  int read(int64_t & serial_number, short endpoint_id, T & value);
-  template <typename T>
-  int write(int64_t & serial_number, short endpoint_id, const T & value);
-  int call(int64_t & serial_number, short endpoint_id);
+  int initialize(const SerialMatrix & serial_numbers) override;
+  int call(std::int64_t serial_number, std::int16_t endpoint_id) override;
 
 private:
   libusb_context * libusb_context_;
 
-  std::map<int64_t, libusb_device_handle *> odrive_map_;
+  std::map<std::int64_t, libusb_device_handle *> odrive_map_;
 
-  short sequence_number_;
+  std::int16_t sequence_number_;
 
-  template <typename T>
-  int read(libusb_device_handle * odrive_handle, short endpoint_id, T & value);
-  template <typename T>
-  int write(libusb_device_handle * odrive_handle, short endpoint_id, const T & value);
-  int call(libusb_device_handle * odrive_handle, short endpoint_id);
+  template<typename T>
+  int read(libusb_device_handle * odrive_handle, std::int16_t endpoint_id, T & value);
+  template<typename T>
+  int write(
+    libusb_device_handle * odrive_handle, std::int16_t endpoint_id, const T & value);
+  int call(libusb_device_handle * odrive_handle, std::int16_t endpoint_id);
 
   int endpointOperation(
-    libusb_device_handle * odrive_handle, short endpoint_id, short response_size,
+    libusb_device_handle * odrive_handle, std::int16_t endpoint_id, std::int16_t response_size,
     bytes request_payload, bytes & response_payload, bool MSB);
 
   bytes encodePacket(
-    short sequence_number, short endpoint_id, short response_size, const bytes & request_payload);
+    std::int16_t sequence_number, std::int16_t endpoint_id, std::int16_t response_size,
+    const bytes & request_payload);
   bytes decodePacket(bytes & response_packet);
+
+  int read_impl(
+    std::int64_t serial_number, std::int16_t endpoint_id, void * value,
+    std::size_t size) override;
+  int write_impl(
+    std::int64_t serial_number, std::int16_t endpoint_id, const void * value,
+    std::size_t size) override;
 };
 }  // namespace odrive

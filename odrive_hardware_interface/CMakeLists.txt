@@ -39,6 +39,9 @@ target_link_libraries(
 
 ament_auto_add_library(
   ${PROJECT_NAME} SHARED
+  src/axis_control.cpp
+  src/axis_telemetry.cpp
+  src/odrive_configuration.cpp
   src/odrive_hardware_interface.cpp
 )
 
@@ -46,6 +49,8 @@ pluginlib_export_plugin_description_file(hardware_interface odrive_hardware_inte
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
+  list(APPEND AMENT_LINT_AUTO_FILE_EXCLUDE
+    "include/odrive_hardware_interface/odrive_endpoints.hpp")
   # the following line skips the linter which checks for copyrights
   # uncomment the line when a copyright and license is not present in all source files
   #set(ament_cmake_copyright_FOUND TRUE)

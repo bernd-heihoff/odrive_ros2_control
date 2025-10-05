@@ -14,46 +14,69 @@
 
 #include "odrive_hardware_interface/odrive_hardware_interface.hpp"
 
+#include <utility>
+
+#include "odrive_hardware_interface/axis_control.hpp"
+#include "odrive_hardware_interface/axis_telemetry.hpp"
+#include "odrive_hardware_interface/axis_utils.hpp"
+#include "odrive_hardware_interface/odrive_usb.hpp"
 #include "pluginlib/class_list_macros.hpp"
 
 namespace odrive_hardware_interface
 {
+namespace
+{
+constexpr const char kLoggerName[] = "ODriveHardwareInterface";
+
+CallbackReturn to_callback_return(int status, const std::string & action)
+{
+  if (status == 0) {
+    return CallbackReturn::SUCCESS;
+  }
+
+  RCLCPP_ERROR(
+    rclcpp::get_logger(kLoggerName), "Transport error (%d) while %s", status, action.c_str());
+  return CallbackReturn::ERROR;
+}
+
+return_type to_io_return(int status, const std::string & action)
+{
+  if (status == 0) {
+    return return_type::OK;
+  }
+
+  RCLCPP_ERROR(
+    rclcpp::get_logger(kLoggerName), "Transport error (%d) while %s", status, action.c_str());
+  return return_type::ERROR;
+}
+
+}  // namespace
+
 CallbackReturn ODriveHardwareInterface::on_init(const hardware_interface::HardwareInfo & info)
 {
   if (hardware_interface::SystemInterface::on_init(info) != CallbackReturn::SUCCESS) {
     return CallbackReturn::ERROR;
   }
 
-  if (info_.sensors.empty() || info_.joints.empty()) {
-    RCLCPP_ERROR(rclcpp::get_logger("ODriveHardwareInterface"), "No sensors or joints defined in hardware info.");
+  std::string parse_error;
+  HardwareConfiguration parsed_config;
+  if (!parse_hardware_configuration(info_, parsed_config, parse_error)) {
+    RCLCPP_ERROR(rclcpp::get_logger(kLoggerName), "%s", parse_error.c_str());
     return CallbackReturn::ERROR;
   }
+  hardware_config_ = std::move(parsed_config);
 
-  // Validate that required parameters exist for each sensor
-  for (const auto & sensor : info_.sensors) {
-    if (sensor.parameters.find("serial_number") == sensor.parameters.end()) {
-      RCLCPP_ERROR(rclcpp::get_logger("ODriveHardwareInterface"), "Sensor '%s' missing 'serial_number' parameter", sensor.name.c_str());
-      return CallbackReturn::ERROR;
-    }
-  }
-
-  // Validate required parameters for each joint
-  for (const auto & joint : info_.joints) {
-    if (joint.parameters.find("serial_number") == joint.parameters.end()) {
-      RCLCPP_ERROR(rclcpp::get_logger("ODriveHardwareInterface"), "Joint '%s' missing 'serial_number' parameter", joint.name.c_str());
-      return CallbackReturn::ERROR;
-    }
-    if (joint.parameters.find("axis") == joint.parameters.end()) {
-      RCLCPP_ERROR(rclcpp::get_logger("ODriveHardwareInterface"), "Joint '%s' missing 'axis' parameter", joint.name.c_str());
-      return CallbackReturn::ERROR;
-    }
-    if (joint.parameters.find("watchdog_timeout") == joint.parameters.end()) {
-      RCLCPP_ERROR(rclcpp::get_logger("ODriveHardwareInterface"), "Joint '%s' missing 'watchdog_timeout' parameter", joint.name.c_str());
-      return CallbackReturn::ERROR;
-    }
-  }
-
+  serial_numbers_.clear();
   serial_numbers_.resize(2);
+  serial_numbers_[0].reserve(hardware_config_.sensors.size());
+  serial_numbers_[1].reserve(hardware_config_.joints.size());
+
+  axes_.clear();
+  axes_.reserve(hardware_config_.joints.size());
+  torque_constants_.clear();
+  torque_constants_.reserve(hardware_config_.joints.size());
+  enable_watchdogs_.clear();
+  enable_watchdogs_.reserve(hardware_config_.joints.size());
 
   hw_vbus_voltages_.resize(info_.sensors.size(), std::numeric_limits<double>::quiet_NaN());
 
@@ -71,52 +94,75 @@ CallbackReturn ODriveHardwareInterface::on_init(const hardware_interface::Hardwa
   hw_fet_temperatures_.resize(info_.joints.size(), std::numeric_limits<double>::quiet_NaN());
   hw_motor_temperatures_.resize(info_.joints.size(), std::numeric_limits<double>::quiet_NaN());
 
-  for (const hardware_interface::ComponentInfo & sensor : info_.sensors) {
-    serial_numbers_[0].emplace_back(std::stoull(sensor.parameters.at("serial_number"), 0, 16));
+  for (const auto & sensor : hardware_config_.sensors) {
+    serial_numbers_[0].emplace_back(sensor.serial_number);
   }
 
-  for (const hardware_interface::ComponentInfo & joint : info_.joints) {
-    serial_numbers_[1].emplace_back(std::stoull(joint.parameters.at("serial_number"), 0, 16));
-    axes_.emplace_back(std::stoi(joint.parameters.at("axis")));
-    enable_watchdogs_.emplace_back(std::stoi(joint.parameters.at("enable_watchdog")));
+  for (const auto & joint : hardware_config_.joints) {
+    serial_numbers_[1].emplace_back(joint.serial_number);
+    axes_.emplace_back(joint.axis);
+    enable_watchdogs_.emplace_back(joint.enable_watchdog);
   }
 
-  odrive = std::make_unique<ODriveUSB>();
-  if (!odrive) {
-    RCLCPP_ERROR(rclcpp::get_logger("ODriveHardwareInterface"), "Failed to create ODriveUSB instance");
+  transport_ = std::make_unique<odrive::ODriveUSB>();
+  if (!transport_) {
+    RCLCPP_ERROR(
+      rclcpp::get_logger(kLoggerName), "Failed to create ODriveUSB instance");
     return CallbackReturn::ERROR;
   }
-  CHECK_TS(odrive->init(serial_numbers_));
+  const auto init_status = transport_->initialize(serial_numbers_);
+  if (init_status != 0) {
+    return to_callback_return(init_status, "initialising ODrive transport");
+  }
 
   for (size_t i = 0; i < info_.joints.size(); i++) {
     float torque_constant;
-    CHECK_TS(odrive->read(
-      serial_numbers_[1][i], AXIS__MOTOR__CONFIG__TORQUE_CONSTANT + per_axis_offset * axes_[i],
-      torque_constant));
+    const int read_status = transport_->read(
+      serial_numbers_[1][i],
+      axis_endpoint(odrive::AXIS__MOTOR__CONFIG__TORQUE_CONSTANT, axes_[i]), torque_constant);
+    if (read_status != 0) {
+      return to_callback_return(read_status, "reading motor torque constant");
+    }
     torque_constants_.emplace_back(torque_constant);
 
     if (enable_watchdogs_[i]) {
-      CHECK_TS(odrive->write(
-        serial_numbers_[1][i], AXIS__CONFIG__WATCHDOG_TIMEOUT + per_axis_offset * axes_[i],
-        std::stof(info_.joints[i].parameters.at("watchdog_timeout"))));
+      const int write_timeout_status = transport_->write(
+        serial_numbers_[1][i],
+        axis_endpoint(odrive::AXIS__CONFIG__WATCHDOG_TIMEOUT, axes_[i]),
+        static_cast<float>(hardware_config_.joints[i].watchdog_timeout));
+      if (write_timeout_status != 0) {
+        return to_callback_return(write_timeout_status, "configuring watchdog timeout");
+      }
     }
-    CHECK_TS(odrive->write(
-      serial_numbers_[1][i], AXIS__CONFIG__ENABLE_WATCHDOG + per_axis_offset * axes_[i],
-      (bool)enable_watchdogs_[i]));
+    const int write_enable_status = transport_->write(
+      serial_numbers_[1][i],
+      axis_endpoint(odrive::AXIS__CONFIG__ENABLE_WATCHDOG, axes_[i]),
+      static_cast<bool>(enable_watchdogs_[i]));
+    if (write_enable_status != 0) {
+      return to_callback_return(write_enable_status, "enabling watchdog");
+    }
   }
 
-  control_level_.resize(info_.joints.size(), integration_level_t::UNDEFINED);
+  control_level_.resize(info_.joints.size(), AxisControlLevel::UNDEFINED);
   return CallbackReturn::SUCCESS;
 }
 
 CallbackReturn ODriveHardwareInterface::on_activate(const rclcpp_lifecycle::State &)
 {
   for (size_t i = 0; i < info_.joints.size(); i++) {
+    const std::int64_t serial = serial_numbers_[1][i];
     if (enable_watchdogs_[i]) {
-      CHECK_TS(
-        odrive->call(serial_numbers_[1][i], AXIS__WATCHDOG_FEED + per_axis_offset * axes_[i]));
+      const int feed_status = transport_->call(
+        serial, axis_endpoint(odrive::AXIS__WATCHDOG_FEED, axes_[i]));
+      if (feed_status != 0) {
+        return to_callback_return(feed_status, "feeding watchdog on activation");
+      }
     }
-    CHECK_TS(odrive->call(serial_numbers_[1][i], AXIS__CLEAR_ERRORS + per_axis_offset * axes_[i]));
+    const int clear_status = transport_->call(
+      serial, axis_endpoint(odrive::AXIS__CLEAR_ERRORS, axes_[i]));
+    if (clear_status != 0) {
+      return to_callback_return(clear_status, "clearing axis errors on activation");
+    }
   }
 
   return CallbackReturn::SUCCESS;
@@ -124,10 +170,14 @@ CallbackReturn ODriveHardwareInterface::on_activate(const rclcpp_lifecycle::Stat
 
 CallbackReturn ODriveHardwareInterface::on_deactivate(const rclcpp_lifecycle::State &)
 {
-  int32_t requested_state = AXIS_STATE_IDLE;
+  int32_t requested_state = kAxisStateIdle;
   for (size_t i = 0; i < info_.joints.size(); i++) {
-    CHECK_TS(odrive->write(
-      serial_numbers_[1][i], AXIS__REQUESTED_STATE + per_axis_offset * axes_[i], requested_state));
+    const int status = transport_->write(
+      serial_numbers_[1][i], axis_endpoint(odrive::AXIS__REQUESTED_STATE, axes_[i]),
+      requested_state);
+    if (status != 0) {
+      return to_callback_return(status, "requesting axis idle state");
+    }
   }
 
   return CallbackReturn::SUCCESS;
@@ -137,29 +187,38 @@ std::vector<hardware_interface::StateInterface> ODriveHardwareInterface::export_
 {
   std::vector<hardware_interface::StateInterface> state_interfaces;
   for (size_t i = 0; i < info_.sensors.size(); i++) {
-    state_interfaces.emplace_back(hardware_interface::StateInterface(
-      info_.sensors[i].name, "vbus_voltage", &hw_vbus_voltages_[i]));
+    state_interfaces.emplace_back(
+      hardware_interface::StateInterface(
+        info_.sensors[i].name, "vbus_voltage", &hw_vbus_voltages_[i]));
   }
 
   for (size_t i = 0; i < info_.joints.size(); i++) {
-    state_interfaces.emplace_back(hardware_interface::StateInterface(
-      info_.joints[i].name, hardware_interface::HW_IF_EFFORT, &hw_efforts_[i]));
-    state_interfaces.emplace_back(hardware_interface::StateInterface(
-      info_.joints[i].name, hardware_interface::HW_IF_VELOCITY, &hw_velocities_[i]));
-    state_interfaces.emplace_back(hardware_interface::StateInterface(
-      info_.joints[i].name, hardware_interface::HW_IF_POSITION, &hw_positions_[i]));
+    state_interfaces.emplace_back(
+      hardware_interface::StateInterface(
+        info_.joints[i].name, hardware_interface::HW_IF_EFFORT, &hw_efforts_[i]));
+    state_interfaces.emplace_back(
+      hardware_interface::StateInterface(
+        info_.joints[i].name, hardware_interface::HW_IF_VELOCITY, &hw_velocities_[i]));
+    state_interfaces.emplace_back(
+      hardware_interface::StateInterface(
+        info_.joints[i].name, hardware_interface::HW_IF_POSITION, &hw_positions_[i]));
     state_interfaces.emplace_back(
       hardware_interface::StateInterface(info_.joints[i].name, "axis_error", &hw_axis_errors_[i]));
-    state_interfaces.emplace_back(hardware_interface::StateInterface(
-      info_.joints[i].name, "motor_error", &hw_motor_errors_[i]));
-    state_interfaces.emplace_back(hardware_interface::StateInterface(
-      info_.joints[i].name, "encoder_error", &hw_encoder_errors_[i]));
-    state_interfaces.emplace_back(hardware_interface::StateInterface(
-      info_.joints[i].name, "controller_error", &hw_controller_errors_[i]));
-    state_interfaces.emplace_back(hardware_interface::StateInterface(
-      info_.joints[i].name, "fet_temperature", &hw_fet_temperatures_[i]));
-    state_interfaces.emplace_back(hardware_interface::StateInterface(
-      info_.joints[i].name, "motor_temperature", &hw_motor_temperatures_[i]));
+    state_interfaces.emplace_back(
+      hardware_interface::StateInterface(
+        info_.joints[i].name, "motor_error", &hw_motor_errors_[i]));
+    state_interfaces.emplace_back(
+      hardware_interface::StateInterface(
+        info_.joints[i].name, "encoder_error", &hw_encoder_errors_[i]));
+    state_interfaces.emplace_back(
+      hardware_interface::StateInterface(
+        info_.joints[i].name, "controller_error", &hw_controller_errors_[i]));
+    state_interfaces.emplace_back(
+      hardware_interface::StateInterface(
+        info_.joints[i].name, "fet_temperature", &hw_fet_temperatures_[i]));
+    state_interfaces.emplace_back(
+      hardware_interface::StateInterface(
+        info_.joints[i].name, "motor_temperature", &hw_motor_temperatures_[i]));
   }
 
   return state_interfaces;
@@ -170,12 +229,15 @@ ODriveHardwareInterface::export_command_interfaces()
 {
   std::vector<hardware_interface::CommandInterface> command_interfaces;
   for (size_t i = 0; i < info_.joints.size(); i++) {
-    command_interfaces.emplace_back(hardware_interface::CommandInterface(
-      info_.joints[i].name, hardware_interface::HW_IF_EFFORT, &hw_commands_efforts_[i]));
-    command_interfaces.emplace_back(hardware_interface::CommandInterface(
-      info_.joints[i].name, hardware_interface::HW_IF_VELOCITY, &hw_commands_velocities_[i]));
-    command_interfaces.emplace_back(hardware_interface::CommandInterface(
-      info_.joints[i].name, hardware_interface::HW_IF_POSITION, &hw_commands_positions_[i]));
+    command_interfaces.emplace_back(
+      hardware_interface::CommandInterface(
+        info_.joints[i].name, hardware_interface::HW_IF_EFFORT, &hw_commands_efforts_[i]));
+    command_interfaces.emplace_back(
+      hardware_interface::CommandInterface(
+        info_.joints[i].name, hardware_interface::HW_IF_VELOCITY, &hw_commands_velocities_[i]));
+    command_interfaces.emplace_back(
+      hardware_interface::CommandInterface(
+        info_.joints[i].name, hardware_interface::HW_IF_POSITION, &hw_commands_positions_[i]));
   }
 
   return command_interfaces;
@@ -188,7 +250,7 @@ return_type ODriveHardwareInterface::prepare_command_mode_switch(
   for (std::string key : stop_interfaces) {
     for (size_t i = 0; i < info_.joints.size(); i++) {
       if (key.find(info_.joints[i].name) != std::string::npos) {
-        control_level_[i] = integration_level_t::UNDEFINED;
+        control_level_[i] = AxisControlLevel::UNDEFINED;
       }
     }
   }
@@ -196,22 +258,22 @@ return_type ODriveHardwareInterface::prepare_command_mode_switch(
   for (std::string key : start_interfaces) {
     for (size_t i = 0; i < info_.joints.size(); i++) {
       switch (control_level_[i]) {
-        case integration_level_t::UNDEFINED:
+        case AxisControlLevel::UNDEFINED:
           if (key == info_.joints[i].name + "/" + hardware_interface::HW_IF_EFFORT) {
-            control_level_[i] = integration_level_t::EFFORT;
+            control_level_[i] = AxisControlLevel::EFFORT;
           }
           break;
-        case integration_level_t::EFFORT:
+        case AxisControlLevel::EFFORT:
           if (key == info_.joints[i].name + "/" + hardware_interface::HW_IF_VELOCITY) {
-            control_level_[i] = integration_level_t::VELOCITY;
+            control_level_[i] = AxisControlLevel::VELOCITY;
           }
           break;
-        case integration_level_t::VELOCITY:
+        case AxisControlLevel::VELOCITY:
           if (key == info_.joints[i].name + "/" + hardware_interface::HW_IF_POSITION) {
-            control_level_[i] = integration_level_t::POSITION;
+            control_level_[i] = AxisControlLevel::POSITION;
           }
           break;
-        case integration_level_t::POSITION:
+        case AxisControlLevel::POSITION:
           break;
       }
     }
@@ -224,79 +286,22 @@ return_type ODriveHardwareInterface::perform_command_mode_switch(
   const std::vector<std::string> &, const std::vector<std::string> &)
 {
   for (size_t i = 0; i < info_.joints.size(); i++) {
-    float input_torque, input_vel, input_pos;
-    int32_t requested_state;
-
-    switch (control_level_[i]) {
-      case integration_level_t::UNDEFINED:
-        requested_state = AXIS_STATE_IDLE;
-        CHECK_RW(odrive->write(
-          serial_numbers_[1][i], AXIS__REQUESTED_STATE + per_axis_offset * axes_[i],
-          requested_state));
-        break;
-
-      case integration_level_t::EFFORT:
-        hw_commands_efforts_[i] = hw_efforts_[i];
-        CHECK_RW(odrive->write(
-          serial_numbers_[1][i],
-          AXIS__CONTROLLER__CONFIG__CONTROL_MODE + per_axis_offset * axes_[i],
-          (int32_t)control_level_[i]));
-        input_torque = hw_commands_efforts_[i];
-        CHECK_RW(odrive->write(
-          serial_numbers_[1][i], AXIS__CONTROLLER__INPUT_TORQUE + per_axis_offset * axes_[i],
-          input_torque));
-        requested_state = AXIS_STATE_CLOSED_LOOP_CONTROL;
-        CHECK_RW(odrive->write(
-          serial_numbers_[1][i], AXIS__REQUESTED_STATE + per_axis_offset * axes_[i],
-          requested_state));
-        break;
-
-      case integration_level_t::VELOCITY:
-        hw_commands_velocities_[i] = hw_velocities_[i];
-        hw_commands_efforts_[i] = 0;
-        CHECK_RW(odrive->write(
-          serial_numbers_[1][i],
-          AXIS__CONTROLLER__CONFIG__CONTROL_MODE + per_axis_offset * axes_[i],
-          (int32_t)control_level_[i]));
-        input_vel = hw_commands_velocities_[i] / 2 / M_PI;
-        CHECK_RW(odrive->write(
-          serial_numbers_[1][i], AXIS__CONTROLLER__INPUT_VEL + per_axis_offset * axes_[i],
-          input_vel));
-        input_torque = hw_commands_efforts_[i];
-        CHECK_RW(odrive->write(
-          serial_numbers_[1][i], AXIS__CONTROLLER__INPUT_TORQUE + per_axis_offset * axes_[i],
-          input_torque));
-        requested_state = AXIS_STATE_CLOSED_LOOP_CONTROL;
-        CHECK_RW(odrive->write(
-          serial_numbers_[1][i], AXIS__REQUESTED_STATE + per_axis_offset * axes_[i],
-          requested_state));
-        break;
-
-      case integration_level_t::POSITION:
-        hw_commands_positions_[i] = hw_positions_[i];
-        hw_commands_velocities_[i] = 0;
-        hw_commands_efforts_[i] = 0;
-        CHECK_RW(odrive->write(
-          serial_numbers_[1][i],
-          AXIS__CONTROLLER__CONFIG__CONTROL_MODE + per_axis_offset * axes_[i],
-          (int32_t)control_level_[i]));
-        input_pos = hw_commands_positions_[i] / 2 / M_PI;
-        CHECK_RW(odrive->write(
-          serial_numbers_[1][i], AXIS__CONTROLLER__INPUT_POS + per_axis_offset * axes_[i],
-          input_pos));
-        input_vel = hw_commands_velocities_[i] / 2 / M_PI;
-        CHECK_RW(odrive->write(
-          serial_numbers_[1][i], AXIS__CONTROLLER__INPUT_VEL + per_axis_offset * axes_[i],
-          input_vel));
-        input_torque = hw_commands_efforts_[i];
-        CHECK_RW(odrive->write(
-          serial_numbers_[1][i], AXIS__CONTROLLER__INPUT_TORQUE + per_axis_offset * axes_[i],
-          input_torque));
-        requested_state = AXIS_STATE_CLOSED_LOOP_CONTROL;
-        CHECK_RW(odrive->write(
-          serial_numbers_[1][i], AXIS__REQUESTED_STATE + per_axis_offset * axes_[i],
-          requested_state));
-        break;
+    AxisCommandState command_state{
+      hw_commands_positions_[i],
+      hw_commands_velocities_[i],
+      hw_commands_efforts_[i],
+      hw_positions_[i],
+      hw_velocities_[i],
+      hw_efforts_[i]};
+    std::string failing_stage;
+    if (const int status = perform_axis_mode_switch(
+        *transport_, serial_numbers_[1][i], axes_[i], control_level_[i], command_state,
+        failing_stage);
+      status != 0)
+    {
+      std::string action = failing_stage.empty() ? "performing axis mode switch" :
+        "performing axis mode switch (" + failing_stage + ")";
+      return to_io_return(status, action);
     }
   }
 
@@ -308,55 +313,36 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
   for (size_t i = 0; i < info_.sensors.size(); i++) {
     float vbus_voltage;
 
-    CHECK_RW(odrive->read(serial_numbers_[0][i], VBUS_VOLTAGE, vbus_voltage));
+    if (const int status =
+      transport_->read(serial_numbers_[0][i], odrive::VBUS_VOLTAGE, vbus_voltage);
+      status != 0)
+    {
+      return to_io_return(status, "reading vbus voltage");
+    }
     hw_vbus_voltages_[i] = vbus_voltage;
   }
 
   for (size_t i = 0; i < info_.joints.size(); i++) {
-    float Iq_measured, vel_estimate, pos_estimate, fet_temperature, motor_temperature;
-    int32_t axis_error, motor_error, encoder_error, controller_error;
-
-    CHECK_RW(odrive->read(
-      serial_numbers_[1][i], AXIS__MOTOR__CURRENT_CONTROL__IQ_MEASURED + per_axis_offset * axes_[i],
-      Iq_measured));
-    hw_efforts_[i] = Iq_measured * torque_constants_[i];
-
-    CHECK_RW(odrive->read(
-      serial_numbers_[1][i], AXIS__ENCODER__VEL_ESTIMATE + per_axis_offset * axes_[i],
-      vel_estimate));
-    hw_velocities_[i] = vel_estimate * 2 * M_PI;
-
-    CHECK_RW(odrive->read(
-      serial_numbers_[1][i], AXIS__ENCODER__POS_ESTIMATE + per_axis_offset * axes_[i],
-      pos_estimate));
-    hw_positions_[i] = pos_estimate * 2 * M_PI;
-
-    CHECK_RW(
-      odrive->read(serial_numbers_[1][i], AXIS__ERROR + per_axis_offset * axes_[i], axis_error));
-    hw_axis_errors_[i] = axis_error;
-
-    CHECK_RW(odrive->read(
-      serial_numbers_[1][i], AXIS__MOTOR__ERROR + per_axis_offset * axes_[i], motor_error));
-    hw_motor_errors_[i] = motor_error;
-
-    CHECK_RW(odrive->read(
-      serial_numbers_[1][i], AXIS__ENCODER__ERROR + per_axis_offset * axes_[i], encoder_error));
-    hw_encoder_errors_[i] = encoder_error;
-
-    CHECK_RW(odrive->read(
-      serial_numbers_[1][i], AXIS__CONTROLLER__ERROR + per_axis_offset * axes_[i],
-      controller_error));
-    hw_controller_errors_[i] = controller_error;
-
-    CHECK_RW(odrive->read(
-      serial_numbers_[1][i], AXIS__FET_THERMISTOR__TEMPERATURE + per_axis_offset * axes_[i],
-      fet_temperature));
-    hw_fet_temperatures_[i] = fet_temperature;
-
-    CHECK_RW(odrive->read(
-      serial_numbers_[1][i], AXIS__MOTOR_THERMISTOR__TEMPERATURE + per_axis_offset * axes_[i],
-      motor_temperature));
-    hw_motor_temperatures_[i] = motor_temperature;
+    AxisTelemetryBuffers buffers{
+      hw_efforts_[i],
+      hw_velocities_[i],
+      hw_positions_[i],
+      hw_axis_errors_[i],
+      hw_motor_errors_[i],
+      hw_encoder_errors_[i],
+      hw_controller_errors_[i],
+      hw_fet_temperatures_[i],
+      hw_motor_temperatures_[i]};
+    std::string failing_stage;
+    if (const int status = read_axis_telemetry(
+        *transport_, serial_numbers_[1][i], axes_[i], torque_constants_[i], buffers,
+        failing_stage);
+      status != 0)
+    {
+      std::string action = failing_stage.empty() ? "reading axis telemetry" :
+        "reading axis telemetry (" + failing_stage + ")";
+      return to_io_return(status, action);
+    }
   }
 
   return return_type::OK;
@@ -365,35 +351,22 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
 return_type ODriveHardwareInterface::write(const rclcpp::Time &, const rclcpp::Duration &)
 {
   for (size_t i = 0; i < info_.joints.size(); i++) {
-    float input_torque, input_vel, input_pos;
-
-    switch (control_level_[i]) {
-      case integration_level_t::POSITION:
-        input_pos = hw_commands_positions_[i] / 2 / M_PI;
-        CHECK_RW(odrive->write(
-          serial_numbers_[1][i], AXIS__CONTROLLER__INPUT_POS + per_axis_offset * axes_[i],
-          input_pos));
-        break;
-
-      case integration_level_t::VELOCITY:
-        input_vel = hw_commands_velocities_[i] / 2 / M_PI;
-        CHECK_RW(odrive->write(
-          serial_numbers_[1][i], AXIS__CONTROLLER__INPUT_VEL + per_axis_offset * axes_[i],
-          input_vel));
-        break;
-
-      case integration_level_t::EFFORT:
-        input_torque = hw_commands_efforts_[i];
-        CHECK_RW(odrive->write(
-          serial_numbers_[1][i], AXIS__CONTROLLER__INPUT_TORQUE + per_axis_offset * axes_[i],
-          input_torque));
-        break;
-
-      case integration_level_t::UNDEFINED:
-        if (enable_watchdogs_[i]) {
-          CHECK_RW(odrive->call(serial_numbers_[1][i], AXIS__WATCHDOG_FEED + per_axis_offset * axes_[i]));
-        }
-        break;
+    AxisCommandState command_state{
+      hw_commands_positions_[i],
+      hw_commands_velocities_[i],
+      hw_commands_efforts_[i],
+      hw_positions_[i],
+      hw_velocities_[i],
+      hw_efforts_[i]};
+    std::string failing_stage;
+    if (const int status = write_axis_command(
+        *transport_, serial_numbers_[1][i], axes_[i], control_level_[i], command_state,
+        enable_watchdogs_[i], failing_stage);
+      status != 0)
+    {
+      std::string action = failing_stage.empty() ? "writing axis command" :
+        "writing axis command (" + failing_stage + ")";
+      return to_io_return(status, action);
     }
   }
 
