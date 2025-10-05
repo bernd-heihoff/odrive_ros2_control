@@ -97,6 +97,12 @@ if(BUILD_TESTING)
     target_include_directories(test_lifecycle PRIVATE ${TEST_INCLUDE_DIR})
     target_link_libraries(test_lifecycle ${PROJECT_NAME})
   endif()
+
+  ament_add_gtest(test_error_monitoring test/test_error_monitoring.cpp)
+  if(TARGET test_error_monitoring)
+    target_include_directories(test_error_monitoring PRIVATE ${TEST_INCLUDE_DIR})
+    target_link_libraries(test_error_monitoring ${PROJECT_NAME})
+  endif()
 endif()
 
 install(
