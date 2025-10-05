@@ -2,7 +2,7 @@
 
 `odrive_ros2_control` provides a ROS 2 hardware interface and reference demos for controlling [ODrive](https://odriverobotics.com) brushless motor controllers through the `ros2_control` framework. The hardware interface speaks the native ODrive USB protocol, exposes torque/velocity/position command surfaces, and reports rich telemetry for monitoring and recovery.
 
-This repository is maintained for the Wackerbot platform and regularly rebased on the upstream Factor Robotics implementation. The `master` branch targets ROS 2 Humble, while archived branches retain Foxy compatibility.
+This repository is maintained for the Wackerbot platform and regularly rebased on the upstream Factor Robotics implementation. The `wackerbot` branch targets ROS 2 Humble Hawksbill.
 
 ## Package summary
 
@@ -13,12 +13,11 @@ This repository is maintained for the Wackerbot platform and regularly rebased o
 
 ## Compatibility
 
-| ODrive firmware / ROS 2 | Foxy Fitzroy | Humble Hawksbill |
+| ROS 2 | ODrive firmware | Branch |
 | --- | --- | --- |
-| v0.5.3 | [foxy-fw-v0.5.3](../../tree/foxy-fw-v0.5.3) | [humble-fw-v0.5.3](../../tree/humble-fw-v0.5.3) |
-| v0.5.1 | [foxy-fw-v0.5.1](../../tree/foxy-fw-v0.5.1) | [humble-fw-v0.5.1](../../tree/humble-fw-v0.5.1) |
+| Humble Hawksbill | v0.5.1 | [wackerbot](../../tree/wackerbot) |
 
-> **Tip:** The Humble branch requires the ROS 2 Humble desktop or base install, along with `libusb-1.0` headers.
+> **Tip:** Ensure ROS 2 Humble (desktop or base) and `libusb-1.0` headers are installed before building.
 
 ## Features
 
@@ -32,9 +31,9 @@ This repository is maintained for the Wackerbot platform and regularly rebased o
 
 ## Requirements
 
-- ROS 2 Foxy or Humble (Humble recommended for active development).
+- ROS 2 Humble Hawksbill.
 - `libusb-1.0` runtime and development headers.
-- ODrive firmware v0.5.1 or newer (v0.5.3 recommended) configured for USB control.
+- ODrive firmware v0.5.1 configured for USB control.
 - A `colcon` workspace with the `ros-humble-ros2-control` stack installed.
 
 ## Getting started
