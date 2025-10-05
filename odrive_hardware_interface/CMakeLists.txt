@@ -60,9 +60,30 @@ if(BUILD_TESTING)
   #set(ament_cmake_cpplint_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
 
-  ament_add_gtest(test_axis_helpers test/test_axis_helpers.cpp)
-  if(TARGET test_axis_helpers)
-    target_link_libraries(test_axis_helpers ${PROJECT_NAME})
+  set(TEST_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/test)
+
+  ament_add_gtest(test_axis_control test/test_axis_control.cpp)
+  if(TARGET test_axis_control)
+    target_include_directories(test_axis_control PRIVATE ${TEST_INCLUDE_DIR})
+    target_link_libraries(test_axis_control ${PROJECT_NAME})
+  endif()
+
+  ament_add_gtest(test_axis_telemetry test/test_axis_telemetry.cpp)
+  if(TARGET test_axis_telemetry)
+    target_include_directories(test_axis_telemetry PRIVATE ${TEST_INCLUDE_DIR})
+    target_link_libraries(test_axis_telemetry ${PROJECT_NAME})
+  endif()
+
+  ament_add_gtest(test_odrive_configuration test/test_odrive_configuration.cpp)
+  if(TARGET test_odrive_configuration)
+    target_include_directories(test_odrive_configuration PRIVATE ${TEST_INCLUDE_DIR})
+    target_link_libraries(test_odrive_configuration ${PROJECT_NAME})
+  endif()
+
+  ament_add_gtest(test_command_safety test/test_command_safety.cpp)
+  if(TARGET test_command_safety)
+    target_include_directories(test_command_safety PRIVATE ${TEST_INCLUDE_DIR})
+    target_link_libraries(test_command_safety ${PROJECT_NAME})
   endif()
 endif()
 

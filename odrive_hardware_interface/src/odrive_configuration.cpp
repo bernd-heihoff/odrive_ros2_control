@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <cctype>
 #include <optional>
+#include <unordered_map>
 
 namespace odrive_hardware_interface
 {
@@ -94,7 +95,7 @@ bool parse_double(const std::string & value, double & result)
 }
 
 bool parse_optional_double(
-  const hardware_interface::ComponentInfo::ParameterMap & parameters,
+  const std::unordered_map<std::string, std::string> & parameters,
   const std::string & key,
   std::optional<double> & target,
   std::string & error_message,

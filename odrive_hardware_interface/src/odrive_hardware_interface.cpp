@@ -142,6 +142,61 @@ constexpr std::array<std::pair<std::int32_t, const char *>, 16> kControllerError
 }};
 
 
+std::optional<std::int32_t> extract_error_value(double value)
+{
+  if (!std::isfinite(value)) {
+    return std::nullopt;
+  }
+
+  const auto cast_value = static_cast<std::int32_t>(value);
+  if (cast_value == 0) {
+    return std::nullopt;
+  }
+
+  return cast_value;
+}
+
+template<std::size_t TableSize>
+void log_error_transition(
+  const std::string & joint_name,
+  const char * label,
+  std::int32_t current,
+  std::int32_t & last,
+  const std::array<std::pair<std::int32_t, const char *>, TableSize> & table)
+{
+  if (current == last) {
+    return;
+  }
+
+  std::ostringstream decoded;
+  bool first = true;
+  for (const auto & entry : table) {
+    if ((current & entry.first) != 0) {
+      if (!first) {
+        decoded << ", ";
+      }
+      decoded << entry.second;
+      first = false;
+    }
+  }
+
+  const auto description = decoded.str();
+
+  RCLCPP_WARN(
+    rclcpp::get_logger(kLoggerName),
+    "%s for joint '%s' changed from 0x%08x to 0x%08x%s%s%s",
+    label,
+    joint_name.c_str(),
+    last,
+    current,
+    description.empty() ? "" : " (",
+    description.c_str(),
+    description.empty() ? "" : ")");
+
+  last = current;
+}
+
+
 CallbackReturn to_callback_return(int status, const std::string & action)
 {
   if (status == 0) {
@@ -192,13 +247,12 @@ bool validate_component(
 }
 
 bool validate_joint_command(
-  const JointContext & joint,
+  const JointConfig::CommandLimits & limits,
   AxisControlLevel level,
   const AxisCommandState & command_state,
   std::string & reason)
 {
   std::ostringstream message;
-  const auto & limits = joint.command_limits;
 
   auto validate_position = [&]() {
       return validate_component(
@@ -281,7 +335,7 @@ CallbackReturn ODriveHardwareInterface::on_init(const hardware_interface::Hardwa
   joints_.clear();
   joints_.reserve(hardware_config_.joints.size());
   for (const auto & joint_config : hardware_config_.joints) {
-    JointContext joint;
+    ODriveHardwareInterface::JointContext joint;
     joint.serial_number = joint_config.serial_number;
     joint.axis = joint_config.axis;
     joint.enable_watchdog = joint_config.enable_watchdog;
@@ -592,8 +646,7 @@ return_type ODriveHardwareInterface::write(const rclcpp::Time &, const rclcpp::D
 
     std::string validation_error;
     if (!validate_joint_command(
-        joints_[i], joints_[i].control_level, command_state,
-        validation_error))
+        joints_[i].command_limits, joints_[i].control_level, command_state, validation_error))
     {
       RCLCPP_ERROR(
         rclcpp::get_logger(kLoggerName),
