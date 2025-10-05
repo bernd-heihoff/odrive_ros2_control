@@ -51,6 +51,7 @@ if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
   list(APPEND AMENT_LINT_AUTO_FILE_EXCLUDE
     "include/odrive_hardware_interface/odrive_endpoints.hpp")
+  find_package(ament_cmake_gtest REQUIRED)
   # the following line skips the linter which checks for copyrights
   # uncomment the line when a copyright and license is not present in all source files
   #set(ament_cmake_copyright_FOUND TRUE)
@@ -58,6 +59,11 @@ if(BUILD_TESTING)
   # uncomment the line when this package is not in a git repo
   #set(ament_cmake_cpplint_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
+
+  ament_add_gtest(test_axis_helpers test/test_axis_helpers.cpp)
+  if(TARGET test_axis_helpers)
+    target_link_libraries(test_axis_helpers ${PROJECT_NAME})
+  endif()
 endif()
 
 ament_auto_package()
