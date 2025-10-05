@@ -55,9 +55,6 @@ public:
   CallbackReturn on_cleanup(const rclcpp_lifecycle::State &) override;
 
   ODRIVE_HARDWARE_INTERFACE_PUBLIC
-  CallbackReturn recover() override;
-
-  ODRIVE_HARDWARE_INTERFACE_PUBLIC
   std::vector<hardware_interface::StateInterface> export_state_interfaces() override;
 
   ODRIVE_HARDWARE_INTERFACE_PUBLIC
@@ -77,6 +74,9 @@ public:
 
   ODRIVE_HARDWARE_INTERFACE_PUBLIC
   return_type write(const rclcpp::Time &, const rclcpp::Duration &) override;
+
+  ODRIVE_HARDWARE_INTERFACE_PUBLIC
+  CallbackReturn recover();
 
   using TransportFactory = std::function<std::unique_ptr<ODriveTransport>()>;
 
