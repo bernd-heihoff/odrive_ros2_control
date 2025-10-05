@@ -14,6 +14,7 @@
 
 #include "odrive_hardware_interface/odrive_usb.hpp"
 
+#include <cinttypes>
 #include <cstdint>
 #include <utility>
 
@@ -115,7 +116,7 @@ int ODriveUSB::initialize(const SerialMatrix & serial_numbers)
     auto it = odrive_map_.begin();
     odrive_map_.insert(std::pair<std::int64_t, libusb_device_handle *>(-it->first, it->second));
     RCLCPP_INFO(
-      kUsbLogger, "Connected to ODrive {:#x}",
+      kUsbLogger, "Connected to ODrive 0x%" PRIx64,
       static_cast<std::uint64_t>(-it->first));
     odrive_map_.erase(it);
   } else {
@@ -129,7 +130,7 @@ int ODriveUSB::initialize(const SerialMatrix & serial_numbers)
               std::pair<std::int64_t, libusb_device_handle *>(
                 -lookup->first, lookup->second));
             RCLCPP_INFO(
-              kUsbLogger, "Connected to ODrive {:#x}",
+              kUsbLogger, "Connected to ODrive 0x%" PRIx64,
               static_cast<std::uint64_t>(-lookup->first));
             odrive_map_.erase(lookup);
           } else {
@@ -166,15 +167,16 @@ int ODriveUSB::read(libusb_device_handle * odrive_handle, std::int16_t endpoint_
     response_payload, true);
   if (ret != LIBUSB_SUCCESS) {
     RCLCPP_ERROR(
-      kUsbLogger, "Endpoint read error (endpoint {}): {}", endpoint_id,
+      kUsbLogger, "Endpoint read error (endpoint %d): %s",
+      static_cast<int>(endpoint_id),
       libusb_error_name(ret));
     return ret;
   }
   if (response_payload.size() < sizeof(T)) {
     RCLCPP_ERROR(
       kUsbLogger,
-      "Endpoint {}: received payload size {} less than expected {}",
-      endpoint_id,
+      "Endpoint %d: received payload size %zu less than expected %zu",
+      static_cast<int>(endpoint_id),
       response_payload.size(),
       sizeof(T));
     return LIBUSB_ERROR_IO;
@@ -238,9 +240,9 @@ int ODriveUSB::endpointOperation(
   if (ret != LIBUSB_SUCCESS) {
     RCLCPP_ERROR(
       kUsbLogger,
-      "Bulk transfer failed on OUT endpoint (seq: {}, endpoint: {}): {}",
-      sequence_number,
-      effective_endpoint,
+      "Bulk transfer failed on OUT endpoint (seq: %d, endpoint: %d): %s",
+      static_cast<int>(sequence_number),
+      static_cast<int>(effective_endpoint),
       libusb_error_name(ret));
     return ret;
   }
@@ -252,20 +254,20 @@ int ODriveUSB::endpointOperation(
     if (ret != LIBUSB_SUCCESS) {
       RCLCPP_ERROR(
         kUsbLogger,
-        "Bulk transfer failed on IN endpoint (seq: {}, endpoint: {}): {}",
-        sequence_number,
-        effective_endpoint,
+        "Bulk transfer failed on IN endpoint (seq: %d, endpoint: %d): %s",
+        static_cast<int>(sequence_number),
+        static_cast<int>(effective_endpoint),
         libusb_error_name(ret));
       return ret;
     }
     if (transferred < response_size) {
       RCLCPP_WARN(
         kUsbLogger,
-        "Bulk transfer (seq: {}, endpoint: {}): transferred {} bytes, expected {}",
-        sequence_number,
-        effective_endpoint,
+        "Bulk transfer (seq: %d, endpoint: %d): transferred %d bytes, expected %d",
+        static_cast<int>(sequence_number),
+        static_cast<int>(effective_endpoint),
         transferred,
-        response_size);
+        static_cast<int>(response_size));
       return LIBUSB_ERROR_IO;
     }
     for (int i = 0; i < transferred; ++i) {
