@@ -1,4 +1,5 @@
 cmake_minimum_required(VERSION 3.5)
+
 project(odrive_hardware_interface)
 
 # Default to C99
@@ -98,6 +99,11 @@ if(BUILD_TESTING)
   endif()
 endif()
 
-ament_auto_package(
-  USE_SCOPED_HEADER_INSTALL_DIR
+install(
+  DIRECTORY include/${PROJECT_NAME}/
+  DESTINATION include/${PROJECT_NAME}
+  FILES_MATCHING
+    PATTERN "*.hpp"
 )
+
+ament_auto_package()
