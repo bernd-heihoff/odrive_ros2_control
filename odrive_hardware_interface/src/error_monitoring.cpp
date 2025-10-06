@@ -21,6 +21,8 @@
 #include <sstream>
 #include <utility>
 
+#include <iomanip>
+
 #include "rclcpp/rclcpp.hpp"
 
 namespace odrive_hardware_interface
@@ -110,6 +112,41 @@ constexpr std::array<std::pair<std::uint64_t, const char *>, 8> kODriveErrorTabl
 }};
 
 template<std::size_t TableSize>
+std::string describe_error_bits(
+  std::uint64_t value,
+  const std::array<std::pair<std::uint64_t, const char *>, TableSize> & table)
+{
+  if (value == 0) {
+    return {};
+  }
+
+  std::ostringstream decoded;
+  decoded << std::hex << std::uppercase;
+  bool first = true;
+  std::uint64_t remaining = value;
+  for (const auto & entry : table) {
+    if ((value & entry.first) == 0) {
+      continue;
+    }
+    if (!first) {
+      decoded << ", ";
+    }
+    decoded << entry.second;
+    first = false;
+    remaining &= ~entry.first;
+  }
+
+  if (remaining != 0) {
+    if (!first) {
+      decoded << ", ";
+    }
+    decoded << "unknown_bits=0x" << remaining;
+  }
+
+  return decoded.str();
+}
+
+template<std::size_t TableSize>
 void log_error_transition(
   const std::string & joint_name,
   const char * label,
@@ -121,19 +158,7 @@ void log_error_transition(
     return;
   }
 
-  std::ostringstream decoded;
-  bool first = true;
-  for (const auto & entry : table) {
-    if ((current & entry.first) != 0) {
-      if (!first) {
-        decoded << ", ";
-      }
-      decoded << entry.second;
-      first = false;
-    }
-  }
-
-  const auto description = decoded.str();
+  const auto description = describe_error_bits(current, table);
 
   RCLCPP_WARN(
     rclcpp::get_logger(kLoggerName),
@@ -166,6 +191,31 @@ std::optional<std::uint64_t> extract_error_value(double value)
   }
 
   return cast_value;
+}
+
+std::string describe_axis_error(std::uint64_t value)
+{
+  return describe_error_bits(value, kAxisErrorTable);
+}
+
+std::string describe_motor_error(std::uint64_t value)
+{
+  return describe_error_bits(value, kMotorErrorTable);
+}
+
+std::string describe_encoder_error(std::uint64_t value)
+{
+  return describe_error_bits(value, kEncoderErrorTable);
+}
+
+std::string describe_controller_error(std::uint64_t value)
+{
+  return describe_error_bits(value, kControllerErrorTable);
+}
+
+std::string describe_odrive_error(std::uint64_t value)
+{
+  return describe_error_bits(value, kODriveErrorTable);
 }
 
 void log_axis_error_transition(

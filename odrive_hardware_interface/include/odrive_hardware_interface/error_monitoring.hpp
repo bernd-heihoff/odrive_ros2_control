@@ -23,6 +23,21 @@ namespace odrive_hardware_interface
 /// Convert a floating-point error value into an integer bitmask if finite and non-zero.
 std::optional<std::uint64_t> extract_error_value(double value);
 
+/// Produce a comma-separated textual description for axis error flags.
+std::string describe_axis_error(std::uint64_t value);
+
+/// Produce a comma-separated textual description for motor error flags.
+std::string describe_motor_error(std::uint64_t value);
+
+/// Produce a comma-separated textual description for encoder error flags.
+std::string describe_encoder_error(std::uint64_t value);
+
+/// Produce a comma-separated textual description for controller error flags.
+std::string describe_controller_error(std::uint64_t value);
+
+/// Produce a comma-separated textual description for top-level ODrive error flags.
+std::string describe_odrive_error(std::uint64_t value);
+
 /// Log axis error bit transitions for a joint using rclcpp warnings.
 void log_axis_error_transition(
   const std::string & joint_name,

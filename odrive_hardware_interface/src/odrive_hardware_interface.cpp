@@ -14,13 +14,23 @@
 
 #include "odrive_hardware_interface/odrive_hardware_interface.hpp"
 
+#include <inttypes.h>
+
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <iomanip>
 #include <limits>
+#include <optional>
+#include <sstream>
+#include <string>
 #include <utility>
 #include <vector>
 
+#include "diagnostic_msgs/msg/diagnostic_status.hpp"
+#include "diagnostic_updater/diagnostic_status_wrapper.hpp"
+#include "diagnostic_updater/diagnostic_updater.hpp"
 #include "odrive_hardware_interface/axis_control.hpp"
 #include "odrive_hardware_interface/axis_telemetry.hpp"
 #include "odrive_hardware_interface/axis_utils.hpp"
@@ -36,6 +46,66 @@ namespace
 {
 constexpr const char kLoggerName[] = "ODriveHardwareInterface";
 constexpr std::int16_t kOdriveErrorEndpoint = 0;
+constexpr const char * kDiagnosticsNodePrefix = "odrive_diagnostics_";
+
+bool try_parse_bool(const std::string & value, bool & result)
+{
+  std::string lowered(value.size(), '\0');
+  std::transform(
+    value.begin(), value.end(), lowered.begin(), [](unsigned char ch) {
+      return static_cast<char>(std::tolower(ch));
+    });
+
+  if (lowered == "true" || lowered == "yes" || lowered == "on") {
+    result = true;
+    return true;
+  }
+  if (lowered == "false" || lowered == "no" || lowered == "off") {
+    result = false;
+    return true;
+  }
+
+  try {
+    result = std::stoi(value) != 0;
+    return true;
+  } catch (const std::exception &) {
+    return false;
+  }
+}
+
+bool try_parse_double(const std::string & value, double & result)
+{
+  try {
+    std::size_t processed = 0;
+    const double parsed = std::stod(value, &processed);
+    if (processed != value.size()) {
+      return false;
+    }
+    result = parsed;
+    return true;
+  } catch (const std::exception &) {
+    return false;
+  }
+}
+
+std::string sanitize_node_suffix(const std::string & input)
+{
+  std::string output;
+  output.reserve(input.size());
+  for (char ch : input) {
+    if (std::isalnum(static_cast<unsigned char>(ch)) || ch == '_' || ch == '-') {
+      output.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+    } else {
+      output.push_back('_');
+    }
+  }
+
+  if (output.empty()) {
+    output = "odrive";
+  }
+
+  return output;
+}
 
 CallbackReturn to_callback_return(int status, const std::string & action)
 {
@@ -106,6 +176,12 @@ void ODriveHardwareInterface::reset_runtime_state()
     joint.last_motor_error = 0;
     joint.last_encoder_error = 0;
     joint.last_controller_error = 0;
+  }
+
+  if (diagnostics_node_) {
+    last_diagnostics_update_ = rclcpp::Time(0, 0, diagnostics_node_->get_clock()->get_clock_type());
+  } else {
+    last_diagnostics_update_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
   }
 }
 
@@ -234,6 +310,82 @@ CallbackReturn ODriveHardwareInterface::on_init(const hardware_interface::Hardwa
       drive.label = joint_config.name + "/drive";
     }
     drives_.emplace_back(std::move(drive));
+  }
+
+  diagnostics_node_.reset();
+  diagnostics_updater_.reset();
+  diagnostics_config_ = DiagnosticsConfig{};
+  diagnostics_period_ = rclcpp::Duration::from_seconds(diagnostics_config_.period_sec);
+  last_diagnostics_update_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+
+  {
+    auto params = info_.hardware_parameters;
+
+    auto bool_it = params.find("publish_diagnostics");
+    if (bool_it != params.end()) {
+      bool enabled = diagnostics_config_.enabled;
+      if (try_parse_bool(bool_it->second, enabled)) {
+        diagnostics_config_.enabled = enabled;
+      } else {
+        RCLCPP_WARN(
+          rclcpp::get_logger(kLoggerName),
+          "Invalid publish_diagnostics value '%s'; keeping default", bool_it->second.c_str());
+      }
+    }
+
+    auto period_it = params.find("diagnostics_period");
+    if (period_it != params.end()) {
+      double parsed_period = diagnostics_config_.period_sec;
+      if (try_parse_double(period_it->second, parsed_period) && parsed_period > 0.0) {
+        diagnostics_config_.period_sec = parsed_period;
+      } else {
+        RCLCPP_WARN(
+          rclcpp::get_logger(kLoggerName),
+          "Invalid diagnostics_period value '%s'; keeping default", period_it->second.c_str());
+      }
+    }
+
+    auto warn_it = params.find("diagnostics_warn_temperature_deg_c");
+    if (warn_it != params.end()) {
+      double parsed = diagnostics_config_.warn_temperature_deg_c;
+      if (try_parse_double(warn_it->second, parsed)) {
+        diagnostics_config_.warn_temperature_deg_c = parsed;
+      } else {
+        RCLCPP_WARN(
+          rclcpp::get_logger(kLoggerName),
+          "Invalid diagnostics_warn_temperature_deg_c '%s'; keeping default",
+          warn_it->second.c_str());
+      }
+    }
+
+    auto error_it = params.find("diagnostics_error_temperature_deg_c");
+    if (error_it != params.end()) {
+      double parsed = diagnostics_config_.error_temperature_deg_c;
+      if (try_parse_double(error_it->second, parsed)) {
+        diagnostics_config_.error_temperature_deg_c = parsed;
+      } else {
+        RCLCPP_WARN(
+          rclcpp::get_logger(kLoggerName),
+          "Invalid diagnostics_error_temperature_deg_c '%s'; keeping default",
+          error_it->second.c_str());
+      }
+    }
+  }
+
+  diagnostics_period_ = rclcpp::Duration::from_seconds(diagnostics_config_.period_sec);
+
+  if (diagnostics_config_.enabled) {
+    const auto suffix = sanitize_node_suffix(info_.name);
+    const std::string node_name = std::string(kDiagnosticsNodePrefix) + suffix;
+    rclcpp::NodeOptions options;
+    options.use_intra_process_comms(false);
+    options.start_parameter_services(false);
+    options.start_parameter_event_publisher(false);
+    diagnostics_node_ = std::make_shared<rclcpp::Node>(node_name, options);
+    diagnostics_updater_ = std::make_shared<diagnostic_updater::Updater>(diagnostics_node_);
+    diagnostics_updater_->setHardwareID(info_.name.empty() ? "odrive" : info_.name);
+    register_diagnostics_tasks();
+    last_diagnostics_update_ = rclcpp::Time(0, 0, diagnostics_node_->get_clock()->get_clock_type());
   }
 
   return initialize_transport();
@@ -460,6 +612,235 @@ return_type ODriveHardwareInterface::perform_command_mode_switch(
   return return_type::OK;
 }
 
+void ODriveHardwareInterface::register_diagnostics_tasks()
+{
+  if (!diagnostics_updater_) {
+    return;
+  }
+
+  for (std::size_t i = 0; i < drives_.size(); ++i) {
+    const auto task_name = std::string("ODrive/") + drives_[i].label;
+    diagnostics_updater_->add(
+      task_name,
+      [this, i](diagnostic_updater::DiagnosticStatusWrapper & status) {
+        populate_drive_diagnostics(status, i);
+      });
+  }
+
+  for (std::size_t i = 0; i < joints_.size(); ++i) {
+    const auto task_name = std::string("ODrive/") + info_.joints[i].name + "/axis";
+    diagnostics_updater_->add(
+      task_name,
+      [this, i](diagnostic_updater::DiagnosticStatusWrapper & status) {
+        populate_joint_diagnostics(status, i);
+      });
+  }
+
+  for (std::size_t i = 0; i < sensors_.size(); ++i) {
+    const auto task_name = std::string("ODrive/") + info_.sensors[i].name + "/power";
+    diagnostics_updater_->add(
+      task_name,
+      [this, i](diagnostic_updater::DiagnosticStatusWrapper & status) {
+        populate_sensor_diagnostics(status, i);
+      });
+  }
+}
+
+std::string ODriveHardwareInterface::serial_to_hex(std::int64_t serial_number)
+{
+  std::ostringstream stream;
+  stream << "0x" << std::uppercase << std::hex << std::setfill('0') << std::setw(12)
+         << static_cast<std::uint64_t>(serial_number);
+  return stream.str();
+}
+
+std::string ODriveHardwareInterface::join_messages(const std::vector<std::string> & parts)
+{
+  if (parts.empty()) {
+    return {};
+  }
+
+  std::ostringstream stream;
+  for (std::size_t i = 0; i < parts.size(); ++i) {
+    if (i != 0) {
+      stream << "; ";
+    }
+    stream << parts[i];
+  }
+  return stream.str();
+}
+
+void ODriveHardwareInterface::populate_joint_diagnostics(
+  diagnostic_updater::DiagnosticStatusWrapper & status,
+  std::size_t index) const
+{
+  const auto & joint_info = info_.joints[index];
+  const auto & joint = joints_[index];
+
+  bool fault_detected = false;
+  bool warning_detected = false;
+  std::vector<std::string> messages;
+
+  status.summary(diagnostic_msgs::msg::DiagnosticStatus::OK, "Nominal");
+  status.add("Joint", joint_info.name);
+  status.add("Axis", joint.axis);
+  status.add("Serial", serial_to_hex(joint.serial_number));
+  status.add("Watchdog enabled", joint.enable_watchdog ? "true" : "false");
+
+  const auto add_error_info = [&status, &messages, &fault_detected](
+    const char * label,
+    const std::optional<std::uint64_t> & value,
+    const std::string & description) {
+      const std::string bits_key = std::string(label) + " error bits";
+      const std::string desc_key = std::string(label) + " error flags";
+      if (value) {
+        status.addf(bits_key, "0x%016" PRIX64, *value);
+        if (!description.empty()) {
+          status.add(desc_key, description);
+          messages.emplace_back(std::string(label) + ": " + description);
+        } else {
+          status.add(desc_key, "(no description)");
+          std::ostringstream stream;
+          stream << std::string(label) << ": 0x" << std::uppercase << std::hex << *value;
+          messages.emplace_back(stream.str());
+        }
+        fault_detected = true;
+      } else {
+        status.add(bits_key, "0x0");
+        status.add(desc_key, "(none)");
+      }
+    };
+
+  const auto axis_error_value = extract_error_value(joint.axis_error);
+  const auto motor_error_value = extract_error_value(joint.motor_error);
+  const auto encoder_error_value = extract_error_value(joint.encoder_error);
+  const auto controller_error_value = extract_error_value(joint.controller_error);
+
+  add_error_info(
+    "Axis",
+    axis_error_value,
+    axis_error_value ? describe_axis_error(*axis_error_value) : std::string{});
+
+  add_error_info(
+    "Motor",
+    motor_error_value,
+    motor_error_value ? describe_motor_error(*motor_error_value) : std::string{});
+
+  add_error_info(
+    "Encoder",
+    encoder_error_value,
+    encoder_error_value ? describe_encoder_error(*encoder_error_value) : std::string{});
+
+  add_error_info(
+    "Controller",
+    controller_error_value,
+    controller_error_value ? describe_controller_error(*controller_error_value) : std::string{});
+
+  const auto assess_temperature = [&](const char * label, double value) {
+      if (!std::isfinite(value)) {
+        status.add(label, "NaN");
+        return;
+      }
+      status.add(label, value);
+      if (value >= diagnostics_config_.error_temperature_deg_c) {
+        fault_detected = true;
+        std::ostringstream stream;
+        stream << label << " high: " << value;
+        messages.emplace_back(stream.str());
+      } else if (value >= diagnostics_config_.warn_temperature_deg_c) {
+        warning_detected = true;
+        std::ostringstream stream;
+        stream << label << " elevated: " << value;
+        messages.emplace_back(stream.str());
+      }
+    };
+
+  assess_temperature("FET temperature [C]", joint.fet_temperature);
+  assess_temperature("Motor temperature [C]", joint.motor_temperature);
+
+  const auto summary_text = join_messages(messages);
+  if (fault_detected) {
+    status.summary(
+      diagnostic_msgs::msg::DiagnosticStatus::ERROR,
+      summary_text.empty() ? "Fault detected" : summary_text);
+  } else if (warning_detected) {
+    status.summary(
+      diagnostic_msgs::msg::DiagnosticStatus::WARN,
+      summary_text.empty() ? "Warning" : summary_text);
+  } else {
+    status.summary(diagnostic_msgs::msg::DiagnosticStatus::OK, "Nominal");
+  }
+}
+
+void ODriveHardwareInterface::populate_drive_diagnostics(
+  diagnostic_updater::DiagnosticStatusWrapper & status,
+  std::size_t index) const
+{
+  const auto & drive = drives_[index];
+
+  status.summary(diagnostic_msgs::msg::DiagnosticStatus::OK, "Nominal");
+  status.add("Drive", drive.label);
+  status.add("Serial", serial_to_hex(drive.serial_number));
+
+  const auto drive_error = extract_error_value(drive.odrive_error);
+  if (drive_error) {
+    const auto description = describe_odrive_error(*drive_error);
+    status.addf("ODrive error bits", "0x%016" PRIX64, *drive_error);
+    if (!description.empty()) {
+      status.add("ODrive error flags", description);
+      status.summary(diagnostic_msgs::msg::DiagnosticStatus::ERROR, description);
+    } else {
+      status.add("ODrive error flags", "(no description)");
+      std::ostringstream stream;
+      stream << "0x" << std::uppercase << std::hex << *drive_error;
+      status.summary(diagnostic_msgs::msg::DiagnosticStatus::ERROR, stream.str());
+    }
+  } else {
+    status.add("ODrive error bits", "0x0");
+    status.add("ODrive error flags", "(none)");
+  }
+}
+
+void ODriveHardwareInterface::populate_sensor_diagnostics(
+  diagnostic_updater::DiagnosticStatusWrapper & status,
+  std::size_t index) const
+{
+  const auto & sensor_info = info_.sensors[index];
+  const auto & sensor = sensors_[index];
+
+  status.summary(diagnostic_msgs::msg::DiagnosticStatus::OK, "Nominal");
+  status.add("Sensor", sensor_info.name);
+  status.add("Serial", serial_to_hex(sensor.serial_number));
+
+  if (std::isfinite(sensor.vbus_voltage)) {
+    status.add("Vbus voltage [V]", sensor.vbus_voltage);
+  } else {
+    status.add("Vbus voltage [V]", "NaN");
+    status.summary(diagnostic_msgs::msg::DiagnosticStatus::WARN, "Voltage unavailable");
+  }
+}
+
+void ODriveHardwareInterface::maybe_update_diagnostics()
+{
+  if (!diagnostics_updater_ || !diagnostics_node_) {
+    return;
+  }
+
+  if (diagnostics_period_.nanoseconds() <= 0) {
+    diagnostics_updater_->force_update();
+    last_diagnostics_update_ = diagnostics_node_->now();
+    return;
+  }
+
+  const auto now = diagnostics_node_->now();
+  if (last_diagnostics_update_.nanoseconds() == 0 ||
+    (now - last_diagnostics_update_) >= diagnostics_period_)
+  {
+    diagnostics_updater_->force_update();
+    last_diagnostics_update_ = now;
+  }
+}
+
 return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Duration &)
 {
   for (size_t i = 0; i < info_.sensors.size(); i++) {
@@ -537,6 +918,8 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
         joints_[i].last_controller_error);
     }
   }
+
+  maybe_update_diagnostics();
 
   return return_type::OK;
 }

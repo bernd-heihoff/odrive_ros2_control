@@ -33,6 +33,12 @@
 using hardware_interface::CallbackReturn;
 using hardware_interface::return_type;
 
+namespace diagnostic_updater
+{
+class DiagnosticStatusWrapper;
+class Updater;
+}  // namespace diagnostic_updater
+
 namespace odrive_hardware_interface
 {
 class ODriveHardwareInterface : public hardware_interface::SystemInterface
@@ -86,6 +92,19 @@ public:
 private:
   CallbackReturn initialize_transport();
   void reset_runtime_state();
+  void register_diagnostics_tasks();
+  void populate_joint_diagnostics(
+    diagnostic_updater::DiagnosticStatusWrapper & status,
+    std::size_t index) const;
+  void populate_drive_diagnostics(
+    diagnostic_updater::DiagnosticStatusWrapper & status,
+    std::size_t index) const;
+  void populate_sensor_diagnostics(
+    diagnostic_updater::DiagnosticStatusWrapper & status,
+    std::size_t index) const;
+  void maybe_update_diagnostics();
+  static std::string serial_to_hex(std::int64_t serial_number);
+  static std::string join_messages(const std::vector<std::string> & parts);
 
   struct SensorContext
   {
@@ -134,6 +153,19 @@ private:
   TransportFactory transport_factory_;
   HardwareConfiguration hardware_config_;
   std::unique_ptr<ODriveTransport> transport_;
+
+  struct DiagnosticsConfig
+  {
+    bool enabled{true};
+    double period_sec{0.5};
+    double warn_temperature_deg_c{85.0};
+    double error_temperature_deg_c{95.0};
+  } diagnostics_config_;
+
+  rclcpp::Node::SharedPtr diagnostics_node_;
+  std::shared_ptr<diagnostic_updater::Updater> diagnostics_updater_;
+  rclcpp::Duration diagnostics_period_{0, 0};
+  rclcpp::Time last_diagnostics_update_{0, 0, RCL_ROS_TIME};
 
   std::vector<SensorContext> sensors_;
   std::vector<DriveContext> drives_;
