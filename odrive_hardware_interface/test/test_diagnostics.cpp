@@ -22,10 +22,125 @@
 #include "diagnostic_msgs/msg/diagnostic_status.hpp"
 #include "diagnostic_updater/diagnostic_status_wrapper.hpp"
 #include "hardware_interface/hardware_info.hpp"
+#include "odrive_hardware_interface/axis_utils.hpp"
 #include "odrive_hardware_interface/odrive_hardware_interface.hpp"
+#include "test_support/mock_transport.hpp"
+
+namespace
+{
+class RclcppTestEnvironment : public ::testing::Environment
+{
+public:
+  void SetUp() override
+  {
+    if (!initialized_) {
+      int argc = 0;
+      rclcpp::init(argc, nullptr);
+      initialized_ = true;
+    }
+  }
+
+  void TearDown() override
+  {
+    if (initialized_) {
+      rclcpp::shutdown();
+      initialized_ = false;
+    }
+  }
+
+private:
+  bool initialized_{false};
+};
+
+::testing::Environment * const g_rclcpp_environment =
+  ::testing::AddGlobalTestEnvironment(new RclcppTestEnvironment);
+}  // namespace
 
 namespace odrive_hardware_interface
 {
+class DiagnosticsConfigTestHelper : public ODriveHardwareInterface
+{
+public:
+  bool configure(const hardware_interface::HardwareInfo & info)
+  {
+    return on_init(info) == CallbackReturn::SUCCESS;
+  }
+
+  bool diagnostics_enabled() const
+  {
+    return diagnostics_config_.enabled;
+  }
+
+  bool has_diagnostics_node() const
+  {
+    return static_cast<bool>(diagnostics_node_);
+  }
+
+  bool has_diagnostics_updater() const
+  {
+    return static_cast<bool>(diagnostics_updater_);
+  }
+
+  double diagnostics_period_seconds() const
+  {
+    return diagnostics_period_.seconds();
+  }
+
+  double warn_threshold() const
+  {
+    return diagnostics_config_.warn_temperature_deg_c;
+  }
+
+  double error_threshold() const
+  {
+    return diagnostics_config_.error_temperature_deg_c;
+  }
+};
+
+namespace
+{
+hardware_interface::HardwareInfo make_basic_hardware_info()
+{
+  hardware_interface::HardwareInfo info;
+  info.name = "odrive";
+
+  hardware_interface::ComponentInfo sensor;
+  sensor.name = "bus";
+  sensor.parameters["serial_number"] = "1";
+  info.sensors.push_back(sensor);
+
+  hardware_interface::ComponentInfo joint;
+  joint.name = "wheel";
+  joint.parameters["serial_number"] = "1";
+  joint.parameters["axis"] = "0";
+  joint.parameters["watchdog_timeout"] = "0.1";
+  joint.parameters["enable_watchdog"] = "false";
+  info.joints.push_back(joint);
+
+  return info;
+}
+
+void configure_default_transport_factory(DiagnosticsConfigTestHelper & helper, MockTransport *& transport)
+{
+  helper.set_transport_factory([&]() {
+    auto instance = std::make_unique<MockTransport>();
+    transport = instance.get();
+    const std::int64_t serial = 0x1;
+    const int axis = 0;
+    const float torque_constant = 6.0F;
+    instance->expect_read(
+      serial,
+      axis_endpoint(odrive::AXIS__MOTOR__CONFIG__TORQUE_CONSTANT, axis),
+      torque_constant);
+    instance->expect_write(
+      serial,
+      axis_endpoint(odrive::AXIS__CONFIG__ENABLE_WATCHDOG, axis),
+      static_cast<bool>(false));
+    return instance;
+  });
+}
+}  // namespace
+
 class DiagnosticsTestHelper : public ODriveHardwareInterface
 {
 public:
@@ -90,6 +205,73 @@ public:
 
 namespace
 {
+TEST(DiagnosticsConfigTest, PublishDiagnosticsFalseDisablesDiagnostics)
+{
+  DiagnosticsConfigTestHelper helper;
+  MockTransport * transport = nullptr;
+  configure_default_transport_factory(helper, transport);
+
+  auto info = make_basic_hardware_info();
+  info.hardware_parameters["publish_diagnostics"] = "false";
+
+  ASSERT_TRUE(helper.configure(info));
+  ASSERT_NE(nullptr, transport);
+  EXPECT_TRUE(transport->expectations_satisfied());
+
+  EXPECT_FALSE(helper.diagnostics_enabled());
+  EXPECT_FALSE(helper.has_diagnostics_node());
+  EXPECT_FALSE(helper.has_diagnostics_updater());
+  EXPECT_DOUBLE_EQ(0.5, helper.diagnostics_period_seconds());
+  EXPECT_DOUBLE_EQ(85.0, helper.warn_threshold());
+  EXPECT_DOUBLE_EQ(95.0, helper.error_threshold());
+}
+
+TEST(DiagnosticsConfigTest, ValidParametersOverrideDefaults)
+{
+  DiagnosticsConfigTestHelper helper;
+  MockTransport * transport = nullptr;
+  configure_default_transport_factory(helper, transport);
+
+  auto info = make_basic_hardware_info();
+  info.hardware_parameters["diagnostics_period"] = "1.25";
+  info.hardware_parameters["diagnostics_warn_temperature_deg_c"] = "60.5";
+  info.hardware_parameters["diagnostics_error_temperature_deg_c"] = "70.5";
+
+  ASSERT_TRUE(helper.configure(info));
+  ASSERT_NE(nullptr, transport);
+  EXPECT_TRUE(transport->expectations_satisfied());
+
+  EXPECT_TRUE(helper.diagnostics_enabled());
+  EXPECT_TRUE(helper.has_diagnostics_node());
+  EXPECT_TRUE(helper.has_diagnostics_updater());
+  EXPECT_NEAR(1.25, helper.diagnostics_period_seconds(), 1e-9);
+  EXPECT_DOUBLE_EQ(60.5, helper.warn_threshold());
+  EXPECT_DOUBLE_EQ(70.5, helper.error_threshold());
+}
+
+TEST(DiagnosticsConfigTest, InvalidParametersFallBackToDefaults)
+{
+  DiagnosticsConfigTestHelper helper;
+  MockTransport * transport = nullptr;
+  configure_default_transport_factory(helper, transport);
+
+  auto info = make_basic_hardware_info();
+  info.hardware_parameters["diagnostics_period"] = "-1.0";
+  info.hardware_parameters["diagnostics_warn_temperature_deg_c"] = "invalid";
+  info.hardware_parameters["diagnostics_error_temperature_deg_c"] = "oops";
+
+  ASSERT_TRUE(helper.configure(info));
+  ASSERT_NE(nullptr, transport);
+  EXPECT_TRUE(transport->expectations_satisfied());
+
+  EXPECT_TRUE(helper.diagnostics_enabled());
+  EXPECT_TRUE(helper.has_diagnostics_node());
+  EXPECT_TRUE(helper.has_diagnostics_updater());
+  EXPECT_DOUBLE_EQ(0.5, helper.diagnostics_period_seconds());
+  EXPECT_DOUBLE_EQ(85.0, helper.warn_threshold());
+  EXPECT_DOUBLE_EQ(95.0, helper.error_threshold());
+}
+
 std::optional<std::string> find_value(
   const diagnostic_updater::DiagnosticStatusWrapper & status,
   const std::string & key)
@@ -179,6 +361,36 @@ TEST(DiagnosticsTest, SensorWarnsWhenVoltageUnavailable)
   const auto voltage_value = find_value(status, "Vbus voltage [V]");
   ASSERT_TRUE(voltage_value.has_value());
   EXPECT_EQ("NaN", voltage_value.value());
+}
+
+TEST(DiagnosticsTest, JointReportsNominalWhenNoFaults)
+{
+  DiagnosticsTestHelper helper;
+  auto & joint = helper.add_joint("idle_joint");
+  joint.fet_temperature = 40.0;
+  joint.motor_temperature = 35.0;
+  joint.axis_error = 0.0;
+  joint.motor_error = 0.0;
+  joint.encoder_error = 0.0;
+  joint.controller_error = 0.0;
+
+  diagnostic_updater::DiagnosticStatusWrapper status;
+  helper.populate_joint_status(status, 0);
+
+  EXPECT_EQ(diagnostic_msgs::msg::DiagnosticStatus::OK, status.level);
+  EXPECT_EQ("Nominal", status.message);
+
+  const auto fet = find_value(status, "FET temperature [C]");
+  ASSERT_TRUE(fet.has_value());
+  EXPECT_EQ("40", fet.value());
+
+  const auto motor = find_value(status, "Motor temperature [C]");
+  ASSERT_TRUE(motor.has_value());
+  EXPECT_EQ("35", motor.value());
+
+  const auto axis_bits = find_value(status, "Axis error bits");
+  ASSERT_TRUE(axis_bits.has_value());
+  EXPECT_EQ("0x0", axis_bits.value());
 }
 }  // namespace
 }  // namespace odrive_hardware_interface

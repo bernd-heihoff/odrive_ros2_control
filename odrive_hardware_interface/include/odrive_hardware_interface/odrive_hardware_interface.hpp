@@ -91,6 +91,7 @@ public:
 
 private:
   friend class DiagnosticsTestHelper;
+  friend class DiagnosticsConfigTestHelper;
 
   CallbackReturn initialize_transport();
   void reset_runtime_state();
