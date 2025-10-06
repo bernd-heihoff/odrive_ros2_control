@@ -90,6 +90,8 @@ public:
   void set_transport_factory(TransportFactory factory);
 
 private:
+  friend class DiagnosticsTestHelper;
+
   CallbackReturn initialize_transport();
   void reset_runtime_state();
   void register_diagnostics_tasks();
