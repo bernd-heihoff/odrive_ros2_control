@@ -14,11 +14,13 @@
 
 #pragma once
 
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <functional>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -176,8 +178,8 @@ private:
   } diagnostics_config_;
 
   std::shared_ptr<DiagnosticsInterface> diagnostics_;
-  rclcpp::Duration diagnostics_period_{0, 0};
-  rclcpp::Time last_diagnostics_update_{0, 0, RCL_ROS_TIME};
+  DiagnosticsInterface::Duration diagnostics_period_{DiagnosticsInterface::Duration::zero()};
+  std::optional<DiagnosticsInterface::TimePoint> last_diagnostics_update_;
 
   std::vector<SensorContext> sensors_;
   std::vector<DriveContext> drives_;

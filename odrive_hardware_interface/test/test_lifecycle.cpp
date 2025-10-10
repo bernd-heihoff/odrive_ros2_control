@@ -32,41 +32,6 @@ namespace odrive_hardware_interface
 {
 namespace
 {
-class RclcppEnvironment : public ::testing::Environment
-{
-public:
-  void SetUp() override
-  {
-    if (rclcpp::ok()) {
-      return;
-    }
-    static const char * argv[] = {"odrive_lifecycle"};
-    int argc = 1;
-    rclcpp::init(argc, argv);
-  }
-};
-
-[[maybe_unused]] ::testing::Environment * const kRclcppEnvironment =
-  ::testing::AddGlobalTestEnvironment(new RclcppEnvironment());
-
-void ensure_rclcpp_context()
-{
-  static std::once_flag registered_shutdown;
-  if (!rclcpp::ok()) {
-    static const char * argv[] = {"odrive_lifecycle"};
-    int argc = 1;
-    rclcpp::init(argc, argv);
-  }
-  std::call_once(
-    registered_shutdown, []() {
-      std::atexit(
-        []() {
-          if (rclcpp::ok()) {
-            rclcpp::shutdown();
-          }
-        });
-    });
-}
 
 class LifecycleTest : public ::testing::Test
 {
@@ -84,7 +49,6 @@ public:
 
 TEST_F(LifecycleTest, RecoverReinitializesTransport)
 {
-  ensure_rclcpp_context();
   TestHardwareInterface interface;
   interface.set_diagnostics_factory(make_fake_diagnostics_factory());
   const std::int64_t serial = 0x00000000000000E1LL;
@@ -156,7 +120,6 @@ TEST_F(LifecycleTest, RecoverReinitializesTransport)
 
 TEST_F(LifecycleTest, InitializeSupportsMultipleDrivesBySerial)
 {
-  ensure_rclcpp_context();
   TestHardwareInterface interface;
   interface.set_diagnostics_factory(make_fake_diagnostics_factory());
   const std::int64_t serial0 = 0x0000000000000101LL;
@@ -249,7 +212,6 @@ TEST_F(LifecycleTest, InitializeSupportsMultipleDrivesBySerial)
 
 TEST_F(LifecycleTest, InitializeFailsWhenTransportCannotMatchSerials)
 {
-  ensure_rclcpp_context();
   TestHardwareInterface interface;
   interface.set_diagnostics_factory(make_fake_diagnostics_factory());
   const std::int64_t serial0 = 0x0000000000000201LL;

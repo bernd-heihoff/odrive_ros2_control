@@ -14,13 +14,12 @@
 
 #pragma once
 
+#include <chrono>
 #include <functional>
 #include <memory>
 #include <string>
 
 #include "odrive_hardware_interface/visibility_control.hpp"
-#include "rcl/time.h"
-#include "rclcpp/rclcpp.hpp"
 
 namespace diagnostic_updater
 {
@@ -32,15 +31,16 @@ namespace odrive_hardware_interface
 class DiagnosticsInterface
 {
 public:
-  using TaskCallback = std::function<void(diagnostic_updater::DiagnosticStatusWrapper &)>;
+  using TaskCallback = std::function<void (diagnostic_updater::DiagnosticStatusWrapper &)>;
+  using TimePoint = std::chrono::nanoseconds;
+  using Duration = std::chrono::nanoseconds;
 
   virtual ~DiagnosticsInterface() = default;
 
   virtual void set_hardware_id(const std::string & hardware_id) = 0;
   virtual void add_task(const std::string & name, TaskCallback task) = 0;
   virtual void force_update() = 0;
-  virtual rclcpp::Time now() const = 0;
-  virtual rcl_clock_type_t clock_type() const = 0;
+  virtual TimePoint now() const = 0;
 };
 
 struct DiagnosticsCreationOptions
@@ -50,5 +50,5 @@ struct DiagnosticsCreationOptions
 };
 
 using DiagnosticsFactory = std::function<std::shared_ptr<DiagnosticsInterface>(
-  const DiagnosticsCreationOptions & options)>;
+      const DiagnosticsCreationOptions & options)>;
 }  // namespace odrive_hardware_interface

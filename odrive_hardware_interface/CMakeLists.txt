@@ -38,6 +38,7 @@ target_link_libraries(
   odrive_usb
   ${LIBUSB1_LIBRARIES}
 )
+ament_target_dependencies(odrive_usb rcutils)
 
 ament_auto_add_library(
   odrive_core SHARED
@@ -58,8 +59,6 @@ target_link_libraries(
   ${PROJECT_NAME}
   odrive_core
 )
-
-pluginlib_export_plugin_description_file(hardware_interface odrive_hardware_interface.xml)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)

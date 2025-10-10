@@ -14,32 +14,11 @@
 
 #pragma once
 
-#include <memory>
-#include <string>
-
 #include "odrive_hardware_interface/diagnostics_interface.hpp"
+#include "odrive_ros2_control/visibility_control.hpp"
 
-namespace odrive_hardware_interface
+namespace odrive_ros2_control
 {
-class FakeDiagnostics final : public DiagnosticsInterface
-{
-public:
-  void set_hardware_id(const std::string &) override {}
+ODRIVE_ROS2_CONTROL_PUBLIC odrive_hardware_interface::DiagnosticsFactory make_ros_diagnostics_factory();
+}  // namespace odrive_ros2_control
 
-  void add_task(const std::string &, TaskCallback) override {}
-
-  void force_update() override {}
-
-  TimePoint now() const override
-  {
-    return TimePoint::zero();
-  }
-};
-
-inline DiagnosticsFactory make_fake_diagnostics_factory()
-{
-  return [](const DiagnosticsCreationOptions &) {
-           return std::make_shared<FakeDiagnostics>();
-         };
-}
-}  // namespace odrive_hardware_interface

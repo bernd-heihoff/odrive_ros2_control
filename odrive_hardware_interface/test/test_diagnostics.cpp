@@ -14,6 +14,7 @@
 
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -25,37 +26,7 @@
 #include "odrive_hardware_interface/axis_utils.hpp"
 #include "odrive_hardware_interface/odrive_hardware_interface.hpp"
 #include "test_support/mock_transport.hpp"
-
-namespace
-{
-class RclcppTestEnvironment : public ::testing::Environment
-{
-public:
-  void SetUp() override
-  {
-    if (!initialized_) {
-      static const char * argv[] = {"odrive_diagnostics"};
-      int argc = 1;
-      rclcpp::init(argc, argv);
-      initialized_ = true;
-    }
-  }
-
-  void TearDown() override
-  {
-    if (initialized_) {
-      rclcpp::shutdown();
-      initialized_ = false;
-    }
-  }
-
-private:
-  bool initialized_{false};
-};
-
-::testing::Environment * const g_rclcpp_environment =
-  ::testing::AddGlobalTestEnvironment(new RclcppTestEnvironment);
-}  // namespace
+#include "test_support/fake_diagnostics.hpp"
 
 namespace odrive_hardware_interface
 {
@@ -84,7 +55,7 @@ public:
 
   double diagnostics_period_seconds() const
   {
-    return diagnostics_period_.seconds();
+    return std::chrono::duration<double>(diagnostics_period_).count();
   }
 
   double warn_threshold() const
@@ -97,53 +68,6 @@ public:
     return diagnostics_config_.error_temperature_deg_c;
   }
 };
-
-namespace
-{
-hardware_interface::HardwareInfo make_basic_hardware_info()
-{
-  hardware_interface::HardwareInfo info;
-  info.name = "odrive";
-
-  hardware_interface::ComponentInfo sensor;
-  sensor.name = "bus";
-  sensor.parameters["serial_number"] = "1";
-  info.sensors.push_back(sensor);
-
-  hardware_interface::ComponentInfo joint;
-  joint.name = "wheel";
-  joint.parameters["serial_number"] = "1";
-  joint.parameters["axis"] = "0";
-  joint.parameters["watchdog_timeout"] = "0.1";
-  joint.parameters["enable_watchdog"] = "false";
-  info.joints.push_back(joint);
-
-  return info;
-}
-
-void configure_default_transport_factory(
-  DiagnosticsConfigTestHelper & helper,
-  MockTransport * & transport)
-{
-  helper.set_transport_factory(
-    [&]() {
-      auto instance = std::make_unique<MockTransport>();
-      transport = instance.get();
-      const std::int64_t serial = 0x1;
-      const int axis = 0;
-      const float torque_constant = 6.0F;
-      instance->expect_read(
-        serial,
-        axis_endpoint(odrive::AXIS__MOTOR__CONFIG__TORQUE_CONSTANT, axis),
-        torque_constant);
-      instance->expect_write(
-        serial,
-        axis_endpoint(odrive::AXIS__CONFIG__ENABLE_WATCHDOG, axis),
-        static_cast<bool>(false));
-      return instance;
-    });
-}
-}  // namespace
 
 class DiagnosticsTestHelper : public ODriveHardwareInterface
 {
@@ -212,9 +136,61 @@ public:
     populate_sensor_diagnostics(status, index);
   }
 };
+}  // namespace odrive_hardware_interface
 
 namespace
 {
+using odrive_hardware_interface::DiagnosticsConfigTestHelper;
+using odrive_hardware_interface::DiagnosticsTestHelper;
+using odrive_hardware_interface::MockTransport;
+using odrive_hardware_interface::axis_endpoint;
+using odrive_hardware_interface::make_fake_diagnostics_factory;
+
+hardware_interface::HardwareInfo make_basic_hardware_info()
+{
+  hardware_interface::HardwareInfo info;
+  info.name = "odrive";
+
+  hardware_interface::ComponentInfo sensor;
+  sensor.name = "bus";
+  sensor.parameters["serial_number"] = "1";
+  info.sensors.push_back(sensor);
+
+  hardware_interface::ComponentInfo joint;
+  joint.name = "wheel";
+  joint.parameters["serial_number"] = "1";
+  joint.parameters["axis"] = "0";
+  joint.parameters["watchdog_timeout"] = "0.1";
+  joint.parameters["enable_watchdog"] = "false";
+  info.joints.push_back(joint);
+
+  return info;
+}
+
+void configure_default_transport_factory(
+  DiagnosticsConfigTestHelper & helper,
+  MockTransport * & transport)
+{
+  helper.set_diagnostics_factory(make_fake_diagnostics_factory());
+  helper.set_transport_factory(
+    [&]() {
+      auto instance = std::make_unique<MockTransport>();
+      transport = instance.get();
+      const std::int64_t serial = 0x1;
+      const int axis = 0;
+      const float torque_constant = 6.0F;
+      instance->expect_read(
+        serial,
+        axis_endpoint(odrive::AXIS__MOTOR__CONFIG__TORQUE_CONSTANT, axis),
+        torque_constant);
+      instance->expect_write(
+        serial,
+        axis_endpoint(odrive::AXIS__CONFIG__ENABLE_WATCHDOG, axis),
+        static_cast<bool>(false));
+      return instance;
+    });
+}
+
 TEST(DiagnosticsConfigTest, PublishDiagnosticsFalseDisablesDiagnostics)
 {
   DiagnosticsConfigTestHelper helper;
@@ -234,6 +210,41 @@ TEST(DiagnosticsConfigTest, PublishDiagnosticsFalseDisablesDiagnostics)
   EXPECT_DOUBLE_EQ(0.5, helper.diagnostics_period_seconds());
   EXPECT_DOUBLE_EQ(85.0, helper.warn_threshold());
   EXPECT_DOUBLE_EQ(95.0, helper.error_threshold());
+}
+
+TEST(DiagnosticsConfigTest, MissingFactoryDisablesDiagnostics)
+{
+  DiagnosticsConfigTestHelper helper;
+  MockTransport * transport = nullptr;
+
+  helper.set_transport_factory(
+    [&]() {
+      auto instance = std::make_unique<MockTransport>();
+      transport = instance.get();
+      const std::int64_t serial = 0x1;
+      const int axis = 0;
+      const float torque_constant = 6.0F;
+      instance->expect_read(
+        serial,
+        axis_endpoint(odrive::AXIS__MOTOR__CONFIG__TORQUE_CONSTANT, axis),
+        torque_constant);
+      instance->expect_write(
+        serial,
+        axis_endpoint(odrive::AXIS__CONFIG__ENABLE_WATCHDOG, axis),
+        static_cast<bool>(false));
+      return instance;
+    });
+
+  auto info = make_basic_hardware_info();
+  info.hardware_parameters["publish_diagnostics"] = "true";
+
+  ASSERT_TRUE(helper.configure(info));
+  ASSERT_NE(nullptr, transport);
+  EXPECT_TRUE(transport->expectations_satisfied());
+
+  EXPECT_FALSE(helper.diagnostics_enabled());
+  EXPECT_FALSE(helper.has_diagnostics_node());
+  EXPECT_FALSE(helper.has_diagnostics_updater());
 }
 
 TEST(DiagnosticsConfigTest, ValidParametersOverrideDefaults)
@@ -403,4 +414,3 @@ TEST(DiagnosticsTest, JointReportsNominalWhenNoFaults)
   EXPECT_EQ("0x0", axis_bits.value());
 }
 }  // namespace
-}  // namespace odrive_hardware_interface

@@ -17,6 +17,7 @@
 #include <inttypes.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
@@ -30,14 +31,13 @@
 
 #include "diagnostic_msgs/msg/diagnostic_status.hpp"
 #include "diagnostic_updater/diagnostic_status_wrapper.hpp"
-#include "diagnostic_updater/diagnostic_updater.hpp"
 #include "odrive_hardware_interface/axis_control.hpp"
 #include "odrive_hardware_interface/axis_telemetry.hpp"
 #include "odrive_hardware_interface/axis_utils.hpp"
 #include "odrive_hardware_interface/command_validation.hpp"
 #include "odrive_hardware_interface/error_monitoring.hpp"
 #include "odrive_hardware_interface/odrive_usb.hpp"
-#include "pluginlib/class_list_macros.hpp"
+#include "rcutils/logging_macros.h"
 
 namespace odrive_hardware_interface
 {
@@ -48,50 +48,11 @@ constexpr const char kLoggerName[] = "ODriveHardwareInterface";
 constexpr std::int16_t kOdriveErrorEndpoint = 0;
 constexpr const char * kDiagnosticsNodePrefix = "odrive_diagnostics_";
 
-class RosDiagnostics final : public DiagnosticsInterface
+DiagnosticsInterface::Duration seconds_to_duration(double seconds)
 {
-public:
-  using TaskCallback = DiagnosticsInterface::TaskCallback;
-
-  explicit RosDiagnostics(const DiagnosticsCreationOptions & options)
-  {
-    rclcpp::NodeOptions node_options;
-    node_options.use_intra_process_comms(false);
-    node_options.start_parameter_services(false);
-    node_options.start_parameter_event_publisher(false);
-    node_ = std::make_shared<rclcpp::Node>(options.node_name, node_options);
-    updater_ = std::make_shared<diagnostic_updater::Updater>(node_);
-  }
-
-  void set_hardware_id(const std::string & hardware_id) override
-  {
-    updater_->setHardwareID(hardware_id);
-  }
-
-  void add_task(const std::string & name, TaskCallback task) override
-  {
-    updater_->add(name, std::move(task));
-  }
-
-  void force_update() override
-  {
-    updater_->force_update();
-  }
-
-  rclcpp::Time now() const override
-  {
-    return node_->now();
-  }
-
-  rcl_clock_type_t clock_type() const override
-  {
-    return node_->get_clock()->get_clock_type();
-  }
-
-private:
-  rclcpp::Node::SharedPtr node_;
-  std::shared_ptr<diagnostic_updater::Updater> updater_;
-};
+  return std::chrono::duration_cast<DiagnosticsInterface::Duration>(
+    std::chrono::duration<double>(seconds));
+}
 
 bool try_parse_bool(const std::string & value, bool & result)
 {
@@ -158,8 +119,8 @@ CallbackReturn to_callback_return(int status, const std::string & action)
     return CallbackReturn::SUCCESS;
   }
 
-  RCLCPP_ERROR(
-    rclcpp::get_logger(kLoggerName), "Transport error (%d) while %s", status, action.c_str());
+  RCUTILS_LOG_ERROR_NAMED(
+    kLoggerName, "Transport error (%d) while %s", status, action.c_str());
   return CallbackReturn::ERROR;
 }
 
@@ -169,8 +130,8 @@ return_type to_io_return(int status, const std::string & action)
     return return_type::OK;
   }
 
-  RCLCPP_ERROR(
-    rclcpp::get_logger(kLoggerName), "Transport error (%d) while %s", status, action.c_str());
+  RCUTILS_LOG_ERROR_NAMED(
+    kLoggerName, "Transport error (%d) while %s", status, action.c_str());
   return return_type::ERROR;
 }
 
@@ -179,9 +140,6 @@ return_type to_io_return(int status, const std::string & action)
 ODriveHardwareInterface::ODriveHardwareInterface()
 : transport_factory_([]() {
       return std::make_unique<odrive::ODriveUSB>();
-    }),
-  diagnostics_factory_([](const DiagnosticsCreationOptions & options) {
-      return std::make_shared<RosDiagnostics>(options);
     })
 {
 }
@@ -231,11 +189,7 @@ void ODriveHardwareInterface::reset_runtime_state()
     joint.last_controller_error = 0;
   }
 
-  if (diagnostics_) {
-    last_diagnostics_update_ = rclcpp::Time(0, 0, diagnostics_->clock_type());
-  } else {
-    last_diagnostics_update_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
-  }
+  last_diagnostics_update_.reset();
 }
 
 CallbackReturn ODriveHardwareInterface::initialize_transport()
@@ -243,8 +197,8 @@ CallbackReturn ODriveHardwareInterface::initialize_transport()
   if (hardware_config_.joints.size() != joints_.size() ||
     hardware_config_.sensors.size() != sensors_.size())
   {
-    RCLCPP_ERROR(
-      rclcpp::get_logger(kLoggerName),
+    RCUTILS_LOG_ERROR_NAMED(
+      kLoggerName,
       "Hardware configuration does not match runtime context (joints: %zu/%zu, sensors: %zu/%zu)",
       hardware_config_.joints.size(), joints_.size(),
       hardware_config_.sensors.size(), sensors_.size());
@@ -253,8 +207,8 @@ CallbackReturn ODriveHardwareInterface::initialize_transport()
 
   transport_ = transport_factory_ ? transport_factory_() : nullptr;
   if (!transport_) {
-    RCLCPP_ERROR(
-      rclcpp::get_logger(kLoggerName), "Failed to create ODrive transport instance");
+    RCUTILS_LOG_ERROR_NAMED(
+      kLoggerName, "Failed to create ODrive transport instance");
     return CallbackReturn::ERROR;
   }
 
@@ -318,14 +272,15 @@ CallbackReturn ODriveHardwareInterface::on_init(const hardware_interface::Hardwa
   return configure_from_info(info);
 }
 
-CallbackReturn ODriveHardwareInterface::configure_from_info(const hardware_interface::HardwareInfo & info)
+CallbackReturn ODriveHardwareInterface::configure_from_info(
+  const hardware_interface::HardwareInfo & info)
 {
   (void)info;
 
   std::string parse_error;
   HardwareConfiguration parsed_config;
   if (!parse_hardware_configuration(info_, parsed_config, parse_error)) {
-    RCLCPP_ERROR(rclcpp::get_logger(kLoggerName), "%s", parse_error.c_str());
+    RCUTILS_LOG_ERROR_NAMED(kLoggerName, "%s", parse_error.c_str());
     return CallbackReturn::ERROR;
   }
   hardware_config_ = std::move(parsed_config);
@@ -374,8 +329,8 @@ CallbackReturn ODriveHardwareInterface::configure_from_info(const hardware_inter
 
   diagnostics_.reset();
   diagnostics_config_ = DiagnosticsConfig{};
-  diagnostics_period_ = rclcpp::Duration::from_seconds(diagnostics_config_.period_sec);
-  last_diagnostics_update_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+  diagnostics_period_ = seconds_to_duration(diagnostics_config_.period_sec);
+  last_diagnostics_update_.reset();
 
   {
     auto params = info_.hardware_parameters;
@@ -386,8 +341,8 @@ CallbackReturn ODriveHardwareInterface::configure_from_info(const hardware_inter
       if (try_parse_bool(bool_it->second, enabled)) {
         diagnostics_config_.enabled = enabled;
       } else {
-        RCLCPP_WARN(
-          rclcpp::get_logger(kLoggerName),
+        RCUTILS_LOG_WARN_NAMED(
+          kLoggerName,
           "Invalid publish_diagnostics value '%s'; keeping default", bool_it->second.c_str());
       }
     }
@@ -398,8 +353,8 @@ CallbackReturn ODriveHardwareInterface::configure_from_info(const hardware_inter
       if (try_parse_double(period_it->second, parsed_period) && parsed_period > 0.0) {
         diagnostics_config_.period_sec = parsed_period;
       } else {
-        RCLCPP_WARN(
-          rclcpp::get_logger(kLoggerName),
+        RCUTILS_LOG_WARN_NAMED(
+          kLoggerName,
           "Invalid diagnostics_period value '%s'; keeping default", period_it->second.c_str());
       }
     }
@@ -410,8 +365,8 @@ CallbackReturn ODriveHardwareInterface::configure_from_info(const hardware_inter
       if (try_parse_double(warn_it->second, parsed)) {
         diagnostics_config_.warn_temperature_deg_c = parsed;
       } else {
-        RCLCPP_WARN(
-          rclcpp::get_logger(kLoggerName),
+        RCUTILS_LOG_WARN_NAMED(
+          kLoggerName,
           "Invalid diagnostics_warn_temperature_deg_c '%s'; keeping default",
           warn_it->second.c_str());
       }
@@ -423,29 +378,36 @@ CallbackReturn ODriveHardwareInterface::configure_from_info(const hardware_inter
       if (try_parse_double(error_it->second, parsed)) {
         diagnostics_config_.error_temperature_deg_c = parsed;
       } else {
-        RCLCPP_WARN(
-          rclcpp::get_logger(kLoggerName),
+        RCUTILS_LOG_WARN_NAMED(
+          kLoggerName,
           "Invalid diagnostics_error_temperature_deg_c '%s'; keeping default",
           error_it->second.c_str());
       }
     }
   }
 
-  diagnostics_period_ = rclcpp::Duration::from_seconds(diagnostics_config_.period_sec);
+  diagnostics_period_ = seconds_to_duration(diagnostics_config_.period_sec);
 
   if (diagnostics_config_.enabled) {
-    const auto suffix = sanitize_node_suffix(info_.name);
-    const std::string node_name = std::string(kDiagnosticsNodePrefix) + suffix;
-    DiagnosticsCreationOptions options{
-      node_name,
-      info_.name.empty() ? std::string("odrive") : info_.name};
-    diagnostics_ = diagnostics_factory_ ? diagnostics_factory_(options) : nullptr;
-    if (diagnostics_) {
-      diagnostics_->set_hardware_id(options.hardware_id);
-      register_diagnostics_tasks();
-      last_diagnostics_update_ = rclcpp::Time(0, 0, diagnostics_->clock_type());
-    } else {
+    if (!diagnostics_factory_) {
+      RCUTILS_LOG_WARN_NAMED(
+        kLoggerName,
+        "Diagnostics requested but no diagnostics factory configured; disabling diagnostics");
       diagnostics_config_.enabled = false;
+    } else {
+      const auto suffix = sanitize_node_suffix(info_.name);
+      const std::string node_name = std::string(kDiagnosticsNodePrefix) + suffix;
+      DiagnosticsCreationOptions options{
+        node_name,
+        info_.name.empty() ? std::string("odrive") : info_.name};
+      diagnostics_ = diagnostics_factory_(options);
+      if (diagnostics_) {
+        diagnostics_->set_hardware_id(options.hardware_id);
+        register_diagnostics_tasks();
+        last_diagnostics_update_.reset();
+      } else {
+        diagnostics_config_.enabled = false;
+      }
     }
   }
 
@@ -887,16 +849,14 @@ void ODriveHardwareInterface::maybe_update_diagnostics()
     return;
   }
 
-  if (diagnostics_period_.nanoseconds() <= 0) {
+  const auto now = diagnostics_->now();
+  if (diagnostics_period_ <= DiagnosticsInterface::Duration::zero()) {
     diagnostics_->force_update();
-    last_diagnostics_update_ = diagnostics_->now();
+    last_diagnostics_update_ = now;
     return;
   }
 
-  const auto now = diagnostics_->now();
-  if (last_diagnostics_update_.nanoseconds() == 0 ||
-    (now - last_diagnostics_update_) >= diagnostics_period_)
-  {
+  if (!last_diagnostics_update_ || (now - *last_diagnostics_update_) >= diagnostics_period_) {
     diagnostics_->force_update();
     last_diagnostics_update_ = now;
   }
@@ -1000,8 +960,8 @@ return_type ODriveHardwareInterface::write(const rclcpp::Time &, const rclcpp::D
     if (!validate_joint_command(
         joints_[i].command_limits, joints_[i].control_level, command_state, validation_error))
     {
-      RCLCPP_ERROR(
-        rclcpp::get_logger(kLoggerName),
+      RCUTILS_LOG_ERROR_NAMED(
+        kLoggerName,
         "Rejected command for joint '%s': %s",
         info_.joints[i].name.c_str(),
         validation_error.c_str());
@@ -1022,7 +982,4 @@ return_type ODriveHardwareInterface::write(const rclcpp::Time &, const rclcpp::D
 
   return return_type::OK;
 }
-}  // namespace odrive_hardware_interface
-
-PLUGINLIB_EXPORT_CLASS(
-  odrive_hardware_interface::ODriveHardwareInterface, hardware_interface::SystemInterface)
+}    // namespace odrive_hardware_interface

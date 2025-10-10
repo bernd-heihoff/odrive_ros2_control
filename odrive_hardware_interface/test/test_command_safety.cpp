@@ -30,49 +30,6 @@ namespace odrive_hardware_interface
 {
 namespace
 {
-class RclcppEnvironment : public ::testing::Environment
-{
-public:
-  void SetUp() override
-  {
-    if (!rclcpp::ok()) {
-      static const char * argv[] = {"odrive_command_safety"};
-      int argc = 1;
-      rclcpp::init(argc, argv);
-    }
-  }
-
-  void TearDown() override
-  {
-    if (rclcpp::ok()) {
-      rclcpp::shutdown();
-    }
-  }
-};
-
-[[maybe_unused]] ::testing::Environment * const kRclcppEnvironment =
-  ::testing::AddGlobalTestEnvironment(new RclcppEnvironment());
-
-void ensure_rclcpp_context()
-{
-  static std::once_flag registered_shutdown;
-  if (!rclcpp::ok()) {
-    static const char * argv[] = {"odrive_command_safety"};
-    int argc = 1;
-    rclcpp::init(argc, argv);
-  }
-  auto context = rclcpp::contexts::get_global_default_context();
-  std::cerr << "context=" << context.get() << " valid=" << (context ? context->is_valid() : false) << std::endl;
-  std::call_once(
-    registered_shutdown, []() {
-      std::atexit(
-        []() {
-          if (rclcpp::ok()) {
-            rclcpp::shutdown();
-          }
-        });
-    });
-}
 
 class CommandSafetyTest : public ::testing::Test
 {
@@ -90,7 +47,6 @@ public:
 
 TEST_F(CommandSafetyTest, RejectsNanCommands)
 {
-  ensure_rclcpp_context();
   TestHardwareInterface interface;
   interface.set_diagnostics_factory(make_fake_diagnostics_factory());
   const std::int64_t serial = 0x00000000000000A1LL;
@@ -172,7 +128,6 @@ TEST_F(CommandSafetyTest, RejectsNanCommands)
 
 TEST_F(CommandSafetyTest, RejectsCommandsOutsideLimits)
 {
-  ensure_rclcpp_context();
   TestHardwareInterface interface;
   interface.set_diagnostics_factory(make_fake_diagnostics_factory());
   const std::int64_t serial = 0x00000000000000B1LL;
@@ -258,7 +213,6 @@ TEST_F(CommandSafetyTest, RejectsCommandsOutsideLimits)
 
 TEST_F(CommandSafetyTest, AcceptsCommandsWithinLimits)
 {
-  ensure_rclcpp_context();
   TestHardwareInterface interface;
   interface.set_diagnostics_factory(make_fake_diagnostics_factory());
   const std::int64_t serial = 0x00000000000000C1LL;
@@ -365,7 +319,6 @@ TEST_F(CommandSafetyTest, AcceptsCommandsWithinLimits)
 
 TEST_F(CommandSafetyTest, AllowsDirectPositionModeRequest)
 {
-  ensure_rclcpp_context();
   TestHardwareInterface interface;
   interface.set_diagnostics_factory(make_fake_diagnostics_factory());
   const std::int64_t serial = 0x00000000000000C2LL;
@@ -458,7 +411,6 @@ TEST_F(CommandSafetyTest, AllowsDirectPositionModeRequest)
 
 TEST_F(CommandSafetyTest, ReportsErrorWhenTransportFailsDuringWrite)
 {
-  ensure_rclcpp_context();
   TestHardwareInterface interface;
   interface.set_diagnostics_factory(make_fake_diagnostics_factory());
   const std::int64_t serial = 0x00000000000000D1LL;
