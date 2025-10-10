@@ -14,21 +14,41 @@
 
 #pragma once
 
+#include <cstdint>
+#include <optional>
 #include <string>
-
-#include "hardware_interface/hardware_info.hpp"
-#include "odrive_hardware_interface/hardware_configuration.hpp"
-#include "odrive_hardware_interface/visibility_control.hpp"
+#include <vector>
 
 namespace odrive_hardware_interface
 {
-/// Parse sensor and joint configuration from a hardware description.
-/// \param info Hardware info provided by ROS control.
-/// \param[out] config Parsed configuration on success.
-/// \param[out] error_message Description when parsing fails.
-/// \returns true when parsing succeeds.
-ODRIVE_HARDWARE_INTERFACE_PUBLIC bool parse_hardware_configuration(
-  const hardware_interface::HardwareInfo & info,
-  HardwareConfiguration & config,
-  std::string & error_message);
+struct SensorConfig
+{
+  std::string name;
+  std::int64_t serial_number;
+};
+
+struct JointConfig
+{
+  std::string name;
+  std::int64_t serial_number;
+  int axis;
+  bool enable_watchdog;
+  double watchdog_timeout;
+  struct CommandLimits
+  {
+    std::optional<double> position_min;
+    std::optional<double> position_max;
+    std::optional<double> velocity_min;
+    std::optional<double> velocity_max;
+    std::optional<double> effort_min;
+    std::optional<double> effort_max;
+    bool enforce{false};
+  } command_limits;
+};
+
+struct HardwareConfiguration
+{
+  std::vector<SensorConfig> sensors;
+  std::vector<JointConfig> joints;
+};
 }  // namespace odrive_hardware_interface

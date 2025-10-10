@@ -23,7 +23,7 @@
 
 #include <iomanip>
 
-#include "rclcpp/rclcpp.hpp"
+#include "rcutils/logging_macros.h"
 
 namespace odrive_hardware_interface
 {
@@ -160,8 +160,8 @@ void log_error_transition(
 
   const auto description = describe_error_bits(current, table);
 
-  RCLCPP_WARN(
-    rclcpp::get_logger(kLoggerName),
+  RCUTILS_LOG_WARN_NAMED(
+    kLoggerName,
     "%s for joint '%s' changed from 0x%016" PRIx64 " to 0x%016" PRIx64 "%s%s%s",
     label,
     joint_name.c_str(),

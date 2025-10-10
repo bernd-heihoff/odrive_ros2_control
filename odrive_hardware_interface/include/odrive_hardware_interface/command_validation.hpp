@@ -17,7 +17,7 @@
 #include <string>
 
 #include "odrive_hardware_interface/axis_control.hpp"
-#include "odrive_hardware_interface/odrive_configuration.hpp"
+#include "odrive_hardware_interface/hardware_configuration.hpp"
 
 namespace odrive_hardware_interface
 {

@@ -14,21 +14,37 @@
 
 #pragma once
 
+#include <memory>
 #include <string>
 
-#include "hardware_interface/hardware_info.hpp"
-#include "odrive_hardware_interface/hardware_configuration.hpp"
-#include "odrive_hardware_interface/visibility_control.hpp"
+#include "odrive_hardware_interface/diagnostics_interface.hpp"
 
 namespace odrive_hardware_interface
 {
-/// Parse sensor and joint configuration from a hardware description.
-/// \param info Hardware info provided by ROS control.
-/// \param[out] config Parsed configuration on success.
-/// \param[out] error_message Description when parsing fails.
-/// \returns true when parsing succeeds.
-ODRIVE_HARDWARE_INTERFACE_PUBLIC bool parse_hardware_configuration(
-  const hardware_interface::HardwareInfo & info,
-  HardwareConfiguration & config,
-  std::string & error_message);
+class FakeDiagnostics final : public DiagnosticsInterface
+{
+public:
+  void set_hardware_id(const std::string &) override {}
+
+  void add_task(const std::string &, TaskCallback) override {}
+
+  void force_update() override {}
+
+  rclcpp::Time now() const override
+  {
+    return rclcpp::Time(0, 0, RCL_ROS_TIME);
+  }
+
+  rcl_clock_type_t clock_type() const override
+  {
+    return RCL_ROS_TIME;
+  }
+};
+
+inline DiagnosticsFactory make_fake_diagnostics_factory()
+{
+  return [](const DiagnosticsCreationOptions &) {
+      return std::make_shared<FakeDiagnostics>();
+    };
+}
 }  // namespace odrive_hardware_interface

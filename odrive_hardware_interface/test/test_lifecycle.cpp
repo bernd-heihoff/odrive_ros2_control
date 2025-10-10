@@ -15,6 +15,8 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <cstdlib>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -23,15 +25,68 @@
 #include "odrive_hardware_interface/odrive_hardware_interface.hpp"
 #include "test_support/mock_transport.hpp"
 #include "rclcpp/rclcpp.hpp"
+#include "test_support/fake_diagnostics.hpp"
 #include "rclcpp_lifecycle/state.hpp"
 
 namespace odrive_hardware_interface
 {
 namespace
 {
-TEST(LifecycleTest, RecoverReinitializesTransport)
+class RclcppEnvironment : public ::testing::Environment
 {
-  ODriveHardwareInterface interface;
+public:
+  void SetUp() override
+  {
+    if (rclcpp::ok()) {
+      return;
+    }
+    static const char * argv[] = {"odrive_lifecycle"};
+    int argc = 1;
+    rclcpp::init(argc, argv);
+  }
+};
+
+[[maybe_unused]] ::testing::Environment * const kRclcppEnvironment =
+  ::testing::AddGlobalTestEnvironment(new RclcppEnvironment());
+
+void ensure_rclcpp_context()
+{
+  static std::once_flag registered_shutdown;
+  if (!rclcpp::ok()) {
+    static const char * argv[] = {"odrive_lifecycle"};
+    int argc = 1;
+    rclcpp::init(argc, argv);
+  }
+  std::call_once(
+    registered_shutdown, []() {
+      std::atexit(
+        []() {
+          if (rclcpp::ok()) {
+            rclcpp::shutdown();
+          }
+        });
+    });
+}
+
+class LifecycleTest : public ::testing::Test
+{
+};
+
+class TestHardwareInterface : public ODriveHardwareInterface
+{
+public:
+  CallbackReturn configure(const hardware_interface::HardwareInfo & info)
+  {
+    info_ = info;
+    return configure_from_info(info);
+  }
+};
+
+TEST_F(LifecycleTest, RecoverReinitializesTransport)
+{
+  ensure_rclcpp_context();
+  TestHardwareInterface interface;
+  interface.set_diagnostics_factory(make_fake_diagnostics_factory());
   const std::int64_t serial = 0x00000000000000E1LL;
   const int axis = 0;
   const float torque_constant = 6.0F;
@@ -71,6 +126,7 @@ TEST(LifecycleTest, RecoverReinitializesTransport)
     });
 
   hardware_interface::HardwareInfo info;
+  info.hardware_parameters["publish_diagnostics"] = "false";
 
   hardware_interface::ComponentInfo sensor;
   sensor.name = "bus";
@@ -85,7 +141,7 @@ TEST(LifecycleTest, RecoverReinitializesTransport)
   joint.parameters["enable_watchdog"] = "false";
   info.joints.push_back(joint);
 
-  ASSERT_EQ(CallbackReturn::SUCCESS, interface.on_init(info));
+  ASSERT_EQ(CallbackReturn::SUCCESS, interface.configure(info));
   ASSERT_EQ(1, creation_index);
   ASSERT_NE(nullptr, transport);
   EXPECT_TRUE(transport->expectations_satisfied());
@@ -98,9 +154,11 @@ TEST(LifecycleTest, RecoverReinitializesTransport)
   EXPECT_TRUE(transport->expectations_satisfied());
 }
 
-TEST(LifecycleTest, InitializeSupportsMultipleDrivesBySerial)
+TEST_F(LifecycleTest, InitializeSupportsMultipleDrivesBySerial)
 {
-  ODriveHardwareInterface interface;
+  ensure_rclcpp_context();
+  TestHardwareInterface interface;
+  interface.set_diagnostics_factory(make_fake_diagnostics_factory());
   const std::int64_t serial0 = 0x0000000000000101LL;
   const std::int64_t serial1 = 0x0000000000000102LL;
   const int axis0 = 0;
@@ -142,6 +200,7 @@ TEST(LifecycleTest, InitializeSupportsMultipleDrivesBySerial)
     });
 
   hardware_interface::HardwareInfo info;
+  info.hardware_parameters["publish_diagnostics"] = "false";
 
   hardware_interface::ComponentInfo sensor0;
   sensor0.name = "bus0";
@@ -177,7 +236,7 @@ TEST(LifecycleTest, InitializeSupportsMultipleDrivesBySerial)
   joint2.parameters["enable_watchdog"] = "false";
   info.joints.push_back(joint2);
 
-  ASSERT_EQ(CallbackReturn::SUCCESS, interface.on_init(info));
+  ASSERT_EQ(CallbackReturn::SUCCESS, interface.configure(info));
   ASSERT_NE(nullptr, transport);
   EXPECT_EQ(1u, transport->initialize_call_count());
   ASSERT_TRUE(transport->last_initialize_serials().has_value());
@@ -188,9 +247,11 @@ TEST(LifecycleTest, InitializeSupportsMultipleDrivesBySerial)
   EXPECT_TRUE(transport->expectations_satisfied());
 }
 
-TEST(LifecycleTest, InitializeFailsWhenTransportCannotMatchSerials)
+TEST_F(LifecycleTest, InitializeFailsWhenTransportCannotMatchSerials)
 {
-  ODriveHardwareInterface interface;
+  ensure_rclcpp_context();
+  TestHardwareInterface interface;
+  interface.set_diagnostics_factory(make_fake_diagnostics_factory());
   const std::int64_t serial0 = 0x0000000000000201LL;
   const std::int64_t serial1 = 0x0000000000000202LL;
 
@@ -204,6 +265,7 @@ TEST(LifecycleTest, InitializeFailsWhenTransportCannotMatchSerials)
     });
 
   hardware_interface::HardwareInfo info;
+  info.hardware_parameters["publish_diagnostics"] = "false";
 
   hardware_interface::ComponentInfo sensor0;
   sensor0.name = "bus0";
@@ -231,7 +293,7 @@ TEST(LifecycleTest, InitializeFailsWhenTransportCannotMatchSerials)
   joint1.parameters["enable_watchdog"] = "false";
   info.joints.push_back(joint1);
 
-  ASSERT_EQ(CallbackReturn::ERROR, interface.on_init(info));
+  ASSERT_EQ(CallbackReturn::ERROR, interface.configure(info));
   ASSERT_NE(nullptr, transport);
   EXPECT_EQ(1u, transport->initialize_call_count());
   ASSERT_TRUE(transport->last_initialize_serials().has_value());

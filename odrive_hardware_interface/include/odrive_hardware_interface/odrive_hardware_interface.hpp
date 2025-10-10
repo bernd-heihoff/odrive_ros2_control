@@ -25,6 +25,7 @@
 #include "hardware_interface/system_interface.hpp"
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
 #include "odrive_hardware_interface/axis_control.hpp"
+#include "odrive_hardware_interface/diagnostics_interface.hpp"
 #include "odrive_hardware_interface/odrive_configuration.hpp"
 #include "odrive_hardware_interface/odrive_transport.hpp"
 #include "odrive_hardware_interface/visibility_control.hpp"
@@ -88,6 +89,14 @@ public:
 
   ODRIVE_HARDWARE_INTERFACE_PUBLIC
   void set_transport_factory(TransportFactory factory);
+
+  using DiagnosticsFactory = odrive_hardware_interface::DiagnosticsFactory;
+
+  ODRIVE_HARDWARE_INTERFACE_PUBLIC
+  void set_diagnostics_factory(DiagnosticsFactory factory);
+
+protected:
+  CallbackReturn configure_from_info(const hardware_interface::HardwareInfo & info);
 
 private:
   friend class DiagnosticsTestHelper;
@@ -154,6 +163,7 @@ private:
   };
 
   TransportFactory transport_factory_;
+  DiagnosticsFactory diagnostics_factory_;
   HardwareConfiguration hardware_config_;
   std::unique_ptr<ODriveTransport> transport_;
 
@@ -165,8 +175,7 @@ private:
     double error_temperature_deg_c{95.0};
   } diagnostics_config_;
 
-  rclcpp::Node::SharedPtr diagnostics_node_;
-  std::shared_ptr<diagnostic_updater::Updater> diagnostics_updater_;
+  std::shared_ptr<DiagnosticsInterface> diagnostics_;
   rclcpp::Duration diagnostics_period_{0, 0};
   rclcpp::Time last_diagnostics_update_{0, 0, RCL_ROS_TIME};
 

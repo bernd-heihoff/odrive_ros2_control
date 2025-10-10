@@ -40,13 +40,23 @@ target_link_libraries(
 )
 
 ament_auto_add_library(
-  ${PROJECT_NAME} SHARED
-  src/command_validation.cpp
+  odrive_core SHARED
   src/axis_control.cpp
   src/axis_telemetry.cpp
+  src/command_validation.cpp
   src/error_monitoring.cpp
-  src/odrive_configuration.cpp
+)
+ament_target_dependencies(odrive_core rcutils)
+
+ament_auto_add_library(
+  ${PROJECT_NAME} SHARED
   src/odrive_hardware_interface.cpp
+  src/odrive_configuration.cpp
+)
+
+target_link_libraries(
+  ${PROJECT_NAME}
+  odrive_core
 )
 
 pluginlib_export_plugin_description_file(hardware_interface odrive_hardware_interface.xml)
@@ -71,13 +81,13 @@ if(BUILD_TESTING)
   ament_add_gtest(test_axis_control test/test_axis_control.cpp)
   if(TARGET test_axis_control)
     target_include_directories(test_axis_control PRIVATE ${TEST_INCLUDE_DIR})
-    target_link_libraries(test_axis_control ${PROJECT_NAME})
+    target_link_libraries(test_axis_control odrive_core)
   endif()
 
   ament_add_gtest(test_axis_telemetry test/test_axis_telemetry.cpp)
   if(TARGET test_axis_telemetry)
     target_include_directories(test_axis_telemetry PRIVATE ${TEST_INCLUDE_DIR})
-    target_link_libraries(test_axis_telemetry ${PROJECT_NAME})
+    target_link_libraries(test_axis_telemetry odrive_core)
   endif()
 
   ament_add_gtest(test_odrive_configuration test/test_odrive_configuration.cpp)
@@ -101,7 +111,7 @@ if(BUILD_TESTING)
   ament_add_gtest(test_error_monitoring test/test_error_monitoring.cpp)
   if(TARGET test_error_monitoring)
     target_include_directories(test_error_monitoring PRIVATE ${TEST_INCLUDE_DIR})
-    target_link_libraries(test_error_monitoring ${PROJECT_NAME})
+    target_link_libraries(test_error_monitoring odrive_core)
   endif()
 
   ament_add_gtest(test_diagnostics test/test_diagnostics.cpp)

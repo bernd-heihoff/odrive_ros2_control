@@ -34,8 +34,9 @@ public:
   void SetUp() override
   {
     if (!initialized_) {
-      int argc = 0;
-      rclcpp::init(argc, nullptr);
+      static const char * argv[] = {"odrive_diagnostics"};
+      int argc = 1;
+      rclcpp::init(argc, argv);
       initialized_ = true;
     }
   }
@@ -73,12 +74,12 @@ public:
 
   bool has_diagnostics_node() const
   {
-    return static_cast<bool>(diagnostics_node_);
+    return static_cast<bool>(diagnostics_);
   }
 
   bool has_diagnostics_updater() const
   {
-    return static_cast<bool>(diagnostics_updater_);
+    return static_cast<bool>(diagnostics_);
   }
 
   double diagnostics_period_seconds() const
@@ -120,24 +121,27 @@ hardware_interface::HardwareInfo make_basic_hardware_info()
   return info;
 }
 
-void configure_default_transport_factory(DiagnosticsConfigTestHelper & helper, MockTransport *& transport)
+void configure_default_transport_factory(
+  DiagnosticsConfigTestHelper & helper,
+  MockTransport * & transport)
 {
-  helper.set_transport_factory([&]() {
-    auto instance = std::make_unique<MockTransport>();
-    transport = instance.get();
-    const std::int64_t serial = 0x1;
-    const int axis = 0;
-    const float torque_constant = 6.0F;
-    instance->expect_read(
-      serial,
-      axis_endpoint(odrive::AXIS__MOTOR__CONFIG__TORQUE_CONSTANT, axis),
-      torque_constant);
-    instance->expect_write(
-      serial,
-      axis_endpoint(odrive::AXIS__CONFIG__ENABLE_WATCHDOG, axis),
-      static_cast<bool>(false));
-    return instance;
-  });
+  helper.set_transport_factory(
+    [&]() {
+      auto instance = std::make_unique<MockTransport>();
+      transport = instance.get();
+      const std::int64_t serial = 0x1;
+      const int axis = 0;
+      const float torque_constant = 6.0F;
+      instance->expect_read(
+        serial,
+        axis_endpoint(odrive::AXIS__MOTOR__CONFIG__TORQUE_CONSTANT, axis),
+        torque_constant);
+      instance->expect_write(
+        serial,
+        axis_endpoint(odrive::AXIS__CONFIG__ENABLE_WATCHDOG, axis),
+        static_cast<bool>(false));
+      return instance;
+    });
 }
 }  // namespace
 
@@ -187,17 +191,23 @@ public:
     return sensors_.back();
   }
 
-  void populate_joint_status(diagnostic_updater::DiagnosticStatusWrapper & status, std::size_t index) const
+  void populate_joint_status(
+    diagnostic_updater::DiagnosticStatusWrapper & status,
+    std::size_t index) const
   {
     populate_joint_diagnostics(status, index);
   }
 
-  void populate_drive_status(diagnostic_updater::DiagnosticStatusWrapper & status, std::size_t index) const
+  void populate_drive_status(
+    diagnostic_updater::DiagnosticStatusWrapper & status,
+    std::size_t index) const
   {
     populate_drive_diagnostics(status, index);
   }
 
-  void populate_sensor_status(diagnostic_updater::DiagnosticStatusWrapper & status, std::size_t index) const
+  void populate_sensor_status(
+    diagnostic_updater::DiagnosticStatusWrapper & status,
+    std::size_t index) const
   {
     populate_sensor_diagnostics(status, index);
   }
