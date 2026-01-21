@@ -247,6 +247,14 @@ int write_axis_command(
         {
           return status;
         }
+
+        if (enable_watchdog) {
+          if (const int status = call_axis("feeding watchdog", odrive::AXIS__WATCHDOG_FEED);
+            status != 0)
+          {
+            return status;
+          }
+        }
         failing_stage.clear();
         return 0;
       }
@@ -269,6 +277,14 @@ int write_axis_command(
         {
           return status;
         }
+
+        if (enable_watchdog) {
+          if (const int status = call_axis("feeding watchdog", odrive::AXIS__WATCHDOG_FEED);
+            status != 0)
+          {
+            return status;
+          }
+        }
         failing_stage.clear();
         return 0;
       }
@@ -278,8 +294,19 @@ int write_axis_command(
           "writing torque command",
           odrive::AXIS__CONTROLLER__INPUT_TORQUE,
           static_cast<float>(command_state.command_effort));
+        if (status != 0) {
+          return status;
+        }
+
+        if (enable_watchdog) {
+          if (const int feed_status = call_axis("feeding watchdog", odrive::AXIS__WATCHDOG_FEED);
+            feed_status != 0)
+          {
+            return feed_status;
+          }
+        }
         failing_stage.clear();
-        return status;
+        return 0;
       }
 
     case AxisControlLevel::UNDEFINED: {

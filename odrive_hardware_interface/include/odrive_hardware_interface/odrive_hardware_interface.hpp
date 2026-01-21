@@ -104,6 +104,16 @@ private:
   friend class DiagnosticsTestHelper;
   friend class DiagnosticsConfigTestHelper;
 
+  struct SafetyConfig
+  {
+    // When true, drive commands are only sent while the hardware component is ACTIVE.
+    bool gate_outputs_with_lifecycle{true};
+    // When true, faulted axes are masked (commands skipped) so remaining axes can keep operating.
+    bool mask_faulted_axes{true};
+    // When true, a faulted axis is transitioned to IDLE once when a fault is detected.
+    bool request_idle_on_axis_fault{true};
+  };
+
   CallbackReturn initialize_transport();
   void reset_runtime_state();
   void register_diagnostics_tasks();
@@ -168,6 +178,13 @@ private:
   DiagnosticsFactory diagnostics_factory_;
   HardwareConfiguration hardware_config_;
   std::unique_ptr<ODriveTransport> transport_;
+
+  SafetyConfig safety_config_;
+  bool outputs_enabled_{false};
+
+  // Runtime tracking for axis fault masking.
+  std::vector<bool> axis_faulted_;
+  std::vector<bool> idle_requested_on_fault_;
 
   struct DiagnosticsConfig
   {

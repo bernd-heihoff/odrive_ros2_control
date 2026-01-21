@@ -156,6 +156,8 @@ void ODriveHardwareInterface::set_diagnostics_factory(DiagnosticsFactory factory
 
 void ODriveHardwareInterface::reset_runtime_state()
 {
+  outputs_enabled_ = false;
+
   for (auto & sensor : sensors_) {
     sensor.vbus_voltage = std::numeric_limits<double>::quiet_NaN();
   }
@@ -190,6 +192,9 @@ void ODriveHardwareInterface::reset_runtime_state()
   }
 
   last_diagnostics_update_.reset();
+
+  axis_faulted_.assign(joints_.size(), false);
+  idle_requested_on_fault_.assign(joints_.size(), false);
 }
 
 CallbackReturn ODriveHardwareInterface::initialize_transport()
@@ -332,6 +337,45 @@ CallbackReturn ODriveHardwareInterface::configure_from_info(
   diagnostics_period_ = seconds_to_duration(diagnostics_config_.period_sec);
   last_diagnostics_update_.reset();
 
+  safety_config_ = SafetyConfig{};
+
+  {
+    auto params = info_.hardware_parameters;
+
+    auto bool_it = params.find("gate_outputs_with_lifecycle");
+    if (bool_it != params.end()) {
+      bool parsed = safety_config_.gate_outputs_with_lifecycle;
+      if (!try_parse_bool(bool_it->second, parsed)) {
+        RCUTILS_LOG_ERROR_NAMED(
+          kLoggerName, "Invalid 'gate_outputs_with_lifecycle' value '%s'", bool_it->second.c_str());
+        return CallbackReturn::ERROR;
+      }
+      safety_config_.gate_outputs_with_lifecycle = parsed;
+    }
+
+    bool_it = params.find("mask_faulted_axes");
+    if (bool_it != params.end()) {
+      bool parsed = safety_config_.mask_faulted_axes;
+      if (!try_parse_bool(bool_it->second, parsed)) {
+        RCUTILS_LOG_ERROR_NAMED(
+          kLoggerName, "Invalid 'mask_faulted_axes' value '%s'", bool_it->second.c_str());
+        return CallbackReturn::ERROR;
+      }
+      safety_config_.mask_faulted_axes = parsed;
+    }
+
+    bool_it = params.find("request_idle_on_axis_fault");
+    if (bool_it != params.end()) {
+      bool parsed = safety_config_.request_idle_on_axis_fault;
+      if (!try_parse_bool(bool_it->second, parsed)) {
+        RCUTILS_LOG_ERROR_NAMED(
+          kLoggerName, "Invalid 'request_idle_on_axis_fault' value '%s'", bool_it->second.c_str());
+        return CallbackReturn::ERROR;
+      }
+      safety_config_.request_idle_on_axis_fault = parsed;
+    }
+  }
+
   {
     auto params = info_.hardware_parameters;
 
@@ -411,11 +455,21 @@ CallbackReturn ODriveHardwareInterface::configure_from_info(
     }
   }
 
+  axis_faulted_.assign(joints_.size(), false);
+  idle_requested_on_fault_.assign(joints_.size(), false);
+
   return initialize_transport();
 }
 
 CallbackReturn ODriveHardwareInterface::on_activate(const rclcpp_lifecycle::State &)
 {
+  if (safety_config_.gate_outputs_with_lifecycle) {
+    outputs_enabled_ = true;
+  }
+
+  std::fill(axis_faulted_.begin(), axis_faulted_.end(), false);
+  std::fill(idle_requested_on_fault_.begin(), idle_requested_on_fault_.end(), false);
+
   for (auto & joint : joints_) {
     if (joint.enable_watchdog) {
       const int feed_status = transport_->call(
@@ -436,6 +490,10 @@ CallbackReturn ODriveHardwareInterface::on_activate(const rclcpp_lifecycle::Stat
 
 CallbackReturn ODriveHardwareInterface::on_deactivate(const rclcpp_lifecycle::State &)
 {
+  if (safety_config_.gate_outputs_with_lifecycle) {
+    outputs_enabled_ = false;
+  }
+
   constexpr std::int32_t requested_state = kAxisStateIdle;
   for (const auto & joint : joints_) {
     const int status = transport_->write(
@@ -612,6 +670,16 @@ return_type ODriveHardwareInterface::perform_command_mode_switch(
   const std::vector<std::string> &, const std::vector<std::string> &)
 {
   for (size_t i = 0; i < info_.joints.size(); i++) {
+    const bool has_fault = safety_config_.mask_faulted_axes &&
+      (extract_error_value(joints_[i].axis_error).has_value() ||
+      extract_error_value(joints_[i].motor_error).has_value() ||
+      extract_error_value(joints_[i].encoder_error).has_value() ||
+      extract_error_value(joints_[i].controller_error).has_value());
+    if (has_fault) {
+      joints_[i].control_level = AxisControlLevel::UNDEFINED;
+      continue;
+    }
+
     AxisCommandState command_state{
       joints_[i].command_position,
       joints_[i].command_velocity,
@@ -947,7 +1015,44 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
 
 return_type ODriveHardwareInterface::write(const rclcpp::Time &, const rclcpp::Duration &)
 {
+  if (safety_config_.gate_outputs_with_lifecycle && !outputs_enabled_) {
+    return return_type::OK;
+  }
+
   for (size_t i = 0; i < info_.joints.size(); i++) {
+    const bool has_fault = safety_config_.mask_faulted_axes &&
+      (extract_error_value(joints_[i].axis_error).has_value() ||
+      extract_error_value(joints_[i].motor_error).has_value() ||
+      extract_error_value(joints_[i].encoder_error).has_value() ||
+      extract_error_value(joints_[i].controller_error).has_value());
+    if (has_fault) {
+      if (!axis_faulted_.empty()) {
+        axis_faulted_[i] = true;
+      }
+
+      if (safety_config_.request_idle_on_axis_fault &&
+        i < idle_requested_on_fault_.size() && !idle_requested_on_fault_[i])
+      {
+        constexpr std::int32_t requested_state = kAxisStateIdle;
+        const int status = transport_->write(
+          joints_[i].serial_number,
+          axis_endpoint(odrive::AXIS__REQUESTED_STATE, joints_[i].axis),
+          requested_state);
+        if (status != 0) {
+          return to_io_return(status, "requesting axis idle state after fault");
+        }
+        idle_requested_on_fault_[i] = true;
+      }
+      continue;
+    }
+
+    if (i < axis_faulted_.size() && axis_faulted_[i]) {
+      axis_faulted_[i] = false;
+    }
+    if (i < idle_requested_on_fault_.size() && idle_requested_on_fault_[i]) {
+      idle_requested_on_fault_[i] = false;
+    }
+
     AxisCommandState command_state{
       joints_[i].command_position,
       joints_[i].command_velocity,

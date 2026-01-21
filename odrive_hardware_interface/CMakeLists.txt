@@ -121,6 +121,12 @@ if(BUILD_TESTING)
     target_include_directories(test_diagnostics PRIVATE ${TEST_INCLUDE_DIR})
     target_link_libraries(test_diagnostics ${PROJECT_NAME})
   endif()
+
+  ament_add_gtest(test_safety_gating test/test_safety_gating.cpp)
+  if(TARGET test_safety_gating)
+    target_include_directories(test_safety_gating PRIVATE ${TEST_INCLUDE_DIR})
+    target_link_libraries(test_safety_gating ${PROJECT_NAME})
+  endif()
 endif()
 
 install(
