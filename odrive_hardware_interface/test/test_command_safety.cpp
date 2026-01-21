@@ -25,6 +25,7 @@
 #include "test_support/fake_diagnostics.hpp"
 #include "test_support/mock_transport.hpp"
 #include "rclcpp/rclcpp.hpp"
+#include "rclcpp_lifecycle/state.hpp"
 
 namespace odrive_hardware_interface
 {
@@ -87,6 +88,12 @@ TEST_F(CommandSafetyTest, RejectsNanCommands)
 
   ASSERT_EQ(CallbackReturn::SUCCESS, interface.configure(info));
   ASSERT_NE(nullptr, transport);
+  EXPECT_TRUE(transport->expectations_satisfied());
+
+  transport->expect_call(
+    serial,
+    axis_endpoint(odrive::AXIS__CLEAR_ERRORS, axis));
+  ASSERT_EQ(CallbackReturn::SUCCESS, interface.on_activate(rclcpp_lifecycle::State{}));
   EXPECT_TRUE(transport->expectations_satisfied());
 
   auto command_interfaces = interface.export_command_interfaces();
@@ -174,6 +181,12 @@ TEST_F(CommandSafetyTest, RejectsCommandsOutsideLimits)
   ASSERT_NE(nullptr, transport);
   EXPECT_TRUE(transport->expectations_satisfied());
 
+  transport->expect_call(
+    serial,
+    axis_endpoint(odrive::AXIS__CLEAR_ERRORS, axis));
+  ASSERT_EQ(CallbackReturn::SUCCESS, interface.on_activate(rclcpp_lifecycle::State{}));
+  EXPECT_TRUE(transport->expectations_satisfied());
+
   auto command_interfaces = interface.export_command_interfaces();
   auto set_command = [&](const std::string & interface_name, double value) {
       for (auto & command : command_interfaces) {
@@ -257,6 +270,12 @@ TEST_F(CommandSafetyTest, AcceptsCommandsWithinLimits)
 
   ASSERT_EQ(CallbackReturn::SUCCESS, interface.configure(info));
   ASSERT_NE(nullptr, transport);
+  EXPECT_TRUE(transport->expectations_satisfied());
+
+  transport->expect_call(
+    serial,
+    axis_endpoint(odrive::AXIS__CLEAR_ERRORS, axis));
+  ASSERT_EQ(CallbackReturn::SUCCESS, interface.on_activate(rclcpp_lifecycle::State{}));
   EXPECT_TRUE(transport->expectations_satisfied());
 
   auto command_interfaces = interface.export_command_interfaces();
@@ -361,6 +380,12 @@ TEST_F(CommandSafetyTest, AllowsDirectPositionModeRequest)
   ASSERT_NE(nullptr, transport);
   EXPECT_TRUE(transport->expectations_satisfied());
 
+  transport->expect_call(
+    serial,
+    axis_endpoint(odrive::AXIS__CLEAR_ERRORS, axis));
+  ASSERT_EQ(CallbackReturn::SUCCESS, interface.on_activate(rclcpp_lifecycle::State{}));
+  EXPECT_TRUE(transport->expectations_satisfied());
+
   auto command_interfaces = interface.export_command_interfaces();
   auto set_command = [&](const std::string & interface_name, double value) {
       for (auto & command : command_interfaces) {
@@ -451,6 +476,12 @@ TEST_F(CommandSafetyTest, ReportsErrorWhenTransportFailsDuringWrite)
 
   ASSERT_EQ(CallbackReturn::SUCCESS, interface.configure(info));
   ASSERT_NE(nullptr, transport);
+  EXPECT_TRUE(transport->expectations_satisfied());
+
+  transport->expect_call(
+    serial,
+    axis_endpoint(odrive::AXIS__CLEAR_ERRORS, axis));
+  ASSERT_EQ(CallbackReturn::SUCCESS, interface.on_activate(rclcpp_lifecycle::State{}));
   EXPECT_TRUE(transport->expectations_satisfied());
 
   auto command_interfaces = interface.export_command_interfaces();
