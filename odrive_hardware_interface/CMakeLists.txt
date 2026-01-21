@@ -60,6 +60,8 @@ target_link_libraries(
   odrive_core
 )
 
+ament_target_dependencies(${PROJECT_NAME} std_srvs)
+
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
   list(APPEND AMENT_LINT_AUTO_FILE_EXCLUDE

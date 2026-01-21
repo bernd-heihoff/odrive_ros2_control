@@ -17,11 +17,13 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <atomic>
 #include <functional>
 #include <limits>
 #include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "hardware_interface/system_interface.hpp"
@@ -32,6 +34,8 @@
 #include "odrive_hardware_interface/odrive_transport.hpp"
 #include "odrive_hardware_interface/visibility_control.hpp"
 #include "rclcpp/rclcpp.hpp"
+#include "rclcpp/executors/single_threaded_executor.hpp"
+#include "std_srvs/srv/set_bool.hpp"
 
 using hardware_interface::CallbackReturn;
 using hardware_interface::return_type;
@@ -50,6 +54,9 @@ public:
   RCLCPP_SHARED_PTR_DEFINITIONS(ODriveHardwareInterface)
 
   ODriveHardwareInterface();
+
+  ODRIVE_HARDWARE_INTERFACE_PUBLIC
+  ~ODriveHardwareInterface() override;
 
   ODRIVE_HARDWARE_INTERFACE_PUBLIC
   CallbackReturn on_init(const hardware_interface::HardwareInfo & info) override;
@@ -108,10 +115,25 @@ private:
   {
     // When true, drive commands are only sent while the hardware component is ACTIVE.
     bool gate_outputs_with_lifecycle{true};
+    // When true, drive commands additionally require supervisor enable.
+    bool require_supervisor_enable{false};
+    // When true, output gating triggers a one-shot request to IDLE all axes.
+    bool request_idle_on_output_disable{true};
+    // When true and rclcpp is initialised, a SetBool service is exposed to enable/disable outputs.
+    bool enable_output_enable_service{true};
     // When true, faulted axes are masked (commands skipped) so remaining axes can keep operating.
     bool mask_faulted_axes{true};
     // When true, a faulted axis is transitioned to IDLE once when a fault is detected.
     bool request_idle_on_axis_fault{true};
+
+    // Host-side command freshness timeout; 0 disables timeout logic.
+    double command_timeout_sec{0.0};
+    // When true, outputs remain disabled after timeout until explicitly re-enabled.
+    bool latch_command_timeout{true};
+
+    // When true, written commands are cleared (NaN) after each write cycle,
+    // requiring controllers to continuously refresh commands.
+    bool require_fresh_commands{false};
   };
 
   CallbackReturn initialize_transport();
@@ -129,6 +151,9 @@ private:
   void maybe_update_diagnostics();
   static std::string serial_to_hex(std::int64_t serial_number);
   static std::string join_messages(const std::vector<std::string> & parts);
+
+  void start_output_gate_server(const std::string & node_suffix);
+  void stop_output_gate_server();
 
   struct SensorContext
   {
@@ -181,6 +206,19 @@ private:
 
   SafetyConfig safety_config_;
   bool outputs_enabled_{false};
+
+  std::atomic_bool supervisor_outputs_enabled_{true};
+  std::atomic_bool output_disable_idle_pending_{false};
+  std::atomic_bool safety_outputs_disabled_{false};
+
+  std::atomic<std::int64_t> command_timeout_ns_{0};
+  std::atomic<std::int64_t> timeout_start_ns_{-1};
+  std::atomic<std::int64_t> last_valid_command_ns_{-1};
+
+  rclcpp::Node::SharedPtr output_gate_node_;
+  std::shared_ptr<rclcpp::executors::SingleThreadedExecutor> output_gate_executor_;
+  rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr output_enable_service_;
+  std::thread output_gate_spin_thread_;
 
   // Runtime tracking for axis fault masking.
   std::vector<bool> axis_faulted_;

@@ -26,6 +26,7 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -144,6 +145,11 @@ ODriveHardwareInterface::ODriveHardwareInterface()
 {
 }
 
+ODriveHardwareInterface::~ODriveHardwareInterface()
+{
+  stop_output_gate_server();
+}
+
 void ODriveHardwareInterface::set_transport_factory(TransportFactory factory)
 {
   transport_factory_ = std::move(factory);
@@ -157,6 +163,11 @@ void ODriveHardwareInterface::set_diagnostics_factory(DiagnosticsFactory factory
 void ODriveHardwareInterface::reset_runtime_state()
 {
   outputs_enabled_ = false;
+  supervisor_outputs_enabled_.store(true);
+  output_disable_idle_pending_.store(false);
+  safety_outputs_disabled_.store(false);
+  timeout_start_ns_.store(-1);
+  last_valid_command_ns_.store(-1);
 
   for (auto & sensor : sensors_) {
     sensor.vbus_voltage = std::numeric_limits<double>::quiet_NaN();
@@ -282,6 +293,8 @@ CallbackReturn ODriveHardwareInterface::configure_from_info(
 {
   (void)info;
 
+  stop_output_gate_server();
+
   std::string parse_error;
   HardwareConfiguration parsed_config;
   if (!parse_hardware_configuration(info_, parsed_config, parse_error)) {
@@ -342,7 +355,46 @@ CallbackReturn ODriveHardwareInterface::configure_from_info(
   {
     auto params = info_.hardware_parameters;
 
-    auto bool_it = params.find("gate_outputs_with_lifecycle");
+    auto bool_it = params.find("require_supervisor_enable");
+    if (bool_it != params.end()) {
+      bool parsed = safety_config_.require_supervisor_enable;
+      if (!try_parse_bool(bool_it->second, parsed)) {
+        RCUTILS_LOG_ERROR_NAMED(
+          kLoggerName,
+          "Invalid 'require_supervisor_enable' value '%s'",
+          bool_it->second.c_str());
+        return CallbackReturn::ERROR;
+      }
+      safety_config_.require_supervisor_enable = parsed;
+    }
+
+    bool_it = params.find("request_idle_on_output_disable");
+    if (bool_it != params.end()) {
+      bool parsed = safety_config_.request_idle_on_output_disable;
+      if (!try_parse_bool(bool_it->second, parsed)) {
+        RCUTILS_LOG_ERROR_NAMED(
+          kLoggerName,
+          "Invalid 'request_idle_on_output_disable' value '%s'",
+          bool_it->second.c_str());
+        return CallbackReturn::ERROR;
+      }
+      safety_config_.request_idle_on_output_disable = parsed;
+    }
+
+    bool_it = params.find("enable_output_enable_service");
+    if (bool_it != params.end()) {
+      bool parsed = safety_config_.enable_output_enable_service;
+      if (!try_parse_bool(bool_it->second, parsed)) {
+        RCUTILS_LOG_ERROR_NAMED(
+          kLoggerName,
+          "Invalid 'enable_output_enable_service' value '%s'",
+          bool_it->second.c_str());
+        return CallbackReturn::ERROR;
+      }
+      safety_config_.enable_output_enable_service = parsed;
+    }
+
+    bool_it = params.find("gate_outputs_with_lifecycle");
     if (bool_it != params.end()) {
       bool parsed = safety_config_.gate_outputs_with_lifecycle;
       if (!try_parse_bool(bool_it->second, parsed)) {
@@ -373,6 +425,39 @@ CallbackReturn ODriveHardwareInterface::configure_from_info(
         return CallbackReturn::ERROR;
       }
       safety_config_.request_idle_on_axis_fault = parsed;
+    }
+
+    auto double_it = params.find("command_timeout_sec");
+    if (double_it != params.end()) {
+      double parsed = safety_config_.command_timeout_sec;
+      if (!try_parse_double(double_it->second, parsed) || !std::isfinite(parsed) || parsed < 0.0) {
+        RCUTILS_LOG_ERROR_NAMED(
+          kLoggerName, "Invalid 'command_timeout_sec' value '%s'", double_it->second.c_str());
+        return CallbackReturn::ERROR;
+      }
+      safety_config_.command_timeout_sec = parsed;
+    }
+
+    bool_it = params.find("latch_command_timeout");
+    if (bool_it != params.end()) {
+      bool parsed = safety_config_.latch_command_timeout;
+      if (!try_parse_bool(bool_it->second, parsed)) {
+        RCUTILS_LOG_ERROR_NAMED(
+          kLoggerName, "Invalid 'latch_command_timeout' value '%s'", bool_it->second.c_str());
+        return CallbackReturn::ERROR;
+      }
+      safety_config_.latch_command_timeout = parsed;
+    }
+
+    bool_it = params.find("require_fresh_commands");
+    if (bool_it != params.end()) {
+      bool parsed = safety_config_.require_fresh_commands;
+      if (!try_parse_bool(bool_it->second, parsed)) {
+        RCUTILS_LOG_ERROR_NAMED(
+          kLoggerName, "Invalid 'require_fresh_commands' value '%s'", bool_it->second.c_str());
+        return CallbackReturn::ERROR;
+      }
+      safety_config_.require_fresh_commands = parsed;
     }
   }
 
@@ -432,6 +517,16 @@ CallbackReturn ODriveHardwareInterface::configure_from_info(
 
   diagnostics_period_ = seconds_to_duration(diagnostics_config_.period_sec);
 
+  command_timeout_ns_.store(
+    static_cast<std::int64_t>(
+      std::llround(safety_config_.command_timeout_sec * 1e9)));
+  safety_outputs_disabled_.store(false);
+  timeout_start_ns_.store(-1);
+  last_valid_command_ns_.store(-1);
+
+  supervisor_outputs_enabled_.store(!safety_config_.require_supervisor_enable);
+  output_disable_idle_pending_.store(safety_config_.require_supervisor_enable);
+
   if (diagnostics_config_.enabled) {
     if (!diagnostics_factory_) {
       RCUTILS_LOG_WARN_NAMED(
@@ -458,7 +553,74 @@ CallbackReturn ODriveHardwareInterface::configure_from_info(
   axis_faulted_.assign(joints_.size(), false);
   idle_requested_on_fault_.assign(joints_.size(), false);
 
+  const auto suffix = sanitize_node_suffix(info_.name);
+  start_output_gate_server(suffix);
+
   return initialize_transport();
+}
+
+void ODriveHardwareInterface::start_output_gate_server(const std::string & node_suffix)
+{
+  if (!safety_config_.enable_output_enable_service) {
+    return;
+  }
+
+  if (!rclcpp::ok()) {
+    return;
+  }
+
+  try {
+    const std::string node_name = std::string("odrive_output_gate_") + node_suffix;
+    output_gate_node_ = std::make_shared<rclcpp::Node>(node_name);
+    output_gate_executor_ = std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
+    output_gate_executor_->add_node(output_gate_node_);
+
+    output_enable_service_ = output_gate_node_->create_service<std_srvs::srv::SetBool>(
+      "set_outputs_enabled",
+      [this](
+        const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
+        std::shared_ptr<std_srvs::srv::SetBool::Response> response) {
+        supervisor_outputs_enabled_.store(request->data);
+        if (!request->data) {
+          output_disable_idle_pending_.store(true);
+          timeout_start_ns_.store(-1);
+          last_valid_command_ns_.store(-1);
+        } else {
+          safety_outputs_disabled_.store(false);
+          timeout_start_ns_.store(-1);
+          last_valid_command_ns_.store(-1);
+        }
+        response->success = true;
+        response->message = request->data ? "outputs enabled" : "outputs disabled";
+      });
+
+    output_gate_spin_thread_ = std::thread(
+      [this]() {
+        output_gate_executor_->spin();
+      });
+  } catch (const std::exception & ex) {
+    RCUTILS_LOG_WARN_NAMED(kLoggerName, "Failed to start output gate server: %s", ex.what());
+    stop_output_gate_server();
+  }
+}
+
+void ODriveHardwareInterface::stop_output_gate_server()
+{
+  if (output_gate_executor_) {
+    output_gate_executor_->cancel();
+  }
+
+  if (output_gate_spin_thread_.joinable()) {
+    output_gate_spin_thread_.join();
+  }
+
+  if (output_gate_executor_ && output_gate_node_) {
+    output_gate_executor_->remove_node(output_gate_node_);
+  }
+
+  output_enable_service_.reset();
+  output_gate_executor_.reset();
+  output_gate_node_.reset();
 }
 
 CallbackReturn ODriveHardwareInterface::on_activate(const rclcpp_lifecycle::State &)
@@ -466,6 +628,16 @@ CallbackReturn ODriveHardwareInterface::on_activate(const rclcpp_lifecycle::Stat
   if (safety_config_.gate_outputs_with_lifecycle) {
     outputs_enabled_ = true;
   }
+
+  if (!safety_config_.require_supervisor_enable) {
+    supervisor_outputs_enabled_.store(true);
+  } else {
+    output_disable_idle_pending_.store(true);
+  }
+
+  safety_outputs_disabled_.store(false);
+  timeout_start_ns_.store(-1);
+  last_valid_command_ns_.store(-1);
 
   std::fill(axis_faulted_.begin(), axis_faulted_.end(), false);
   std::fill(idle_requested_on_fault_.begin(), idle_requested_on_fault_.end(), false);
@@ -494,6 +666,14 @@ CallbackReturn ODriveHardwareInterface::on_deactivate(const rclcpp_lifecycle::St
     outputs_enabled_ = false;
   }
 
+  if (safety_config_.require_supervisor_enable) {
+    supervisor_outputs_enabled_.store(false);
+  }
+
+  safety_outputs_disabled_.store(false);
+  timeout_start_ns_.store(-1);
+  last_valid_command_ns_.store(-1);
+
   constexpr std::int32_t requested_state = kAxisStateIdle;
   for (const auto & joint : joints_) {
     const int status = transport_->write(
@@ -509,6 +689,7 @@ CallbackReturn ODriveHardwareInterface::on_deactivate(const rclcpp_lifecycle::St
 
 CallbackReturn ODriveHardwareInterface::on_cleanup(const rclcpp_lifecycle::State &)
 {
+  stop_output_gate_server();
   transport_.reset();
   reset_runtime_state();
   return CallbackReturn::SUCCESS;
@@ -1013,11 +1194,70 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
   return return_type::OK;
 }
 
-return_type ODriveHardwareInterface::write(const rclcpp::Time &, const rclcpp::Duration &)
+return_type ODriveHardwareInterface::write(const rclcpp::Time & time, const rclcpp::Duration &)
 {
-  if (safety_config_.gate_outputs_with_lifecycle && !outputs_enabled_) {
+  const bool lifecycle_ok = !safety_config_.gate_outputs_with_lifecycle || outputs_enabled_;
+  const bool supervisor_ok = !safety_config_.require_supervisor_enable ||
+    supervisor_outputs_enabled_.load();
+  const auto safety_disabled = safety_outputs_disabled_.load();
+
+  const auto timeout_ns = command_timeout_ns_.load();
+  const std::int64_t now_ns = time.nanoseconds();
+  const bool time_valid = (now_ns > 0);
+  const bool timeout_enabled = (timeout_ns > 0);
+  const bool any_active_control = std::any_of(
+    joints_.begin(), joints_.end(), [](const JointContext & joint) {
+      return joint.control_level != AxisControlLevel::UNDEFINED;
+    });
+
+  if (!any_active_control) {
+    timeout_start_ns_.store(-1);
+    last_valid_command_ns_.store(-1);
+  }
+
+  if (timeout_enabled && time_valid && any_active_control && lifecycle_ok && supervisor_ok &&
+    !safety_disabled)
+  {
+    auto start_ns = timeout_start_ns_.load();
+    if (start_ns < 0) {
+      timeout_start_ns_.store(now_ns);
+      last_valid_command_ns_.store(now_ns);
+    }
+
+    const auto last_valid_ns = last_valid_command_ns_.load();
+    if (last_valid_ns > 0 && (now_ns - last_valid_ns) > timeout_ns) {
+      bool expected = false;
+      if (safety_outputs_disabled_.compare_exchange_strong(expected, true)) {
+        RCUTILS_LOG_ERROR_NAMED(
+          kLoggerName,
+          "Command timeout (%0.3fs): disabling outputs",
+          safety_config_.command_timeout_sec);
+      }
+      output_disable_idle_pending_.store(true);
+    }
+  }
+
+  const bool safety_ok = !safety_outputs_disabled_.load();
+
+  if (!(lifecycle_ok && supervisor_ok && safety_ok)) {
+    if (safety_config_.request_idle_on_output_disable &&
+      output_disable_idle_pending_.exchange(false))
+    {
+      constexpr std::int32_t requested_state = kAxisStateIdle;
+      for (const auto & joint : joints_) {
+        const int status = transport_->write(
+          joint.serial_number,
+          axis_endpoint(odrive::AXIS__REQUESTED_STATE, joint.axis),
+          requested_state);
+        if (status != 0) {
+          return to_io_return(status, "requesting axis idle state after output disable");
+        }
+      }
+    }
     return return_type::OK;
   }
+
+  bool saw_any_valid_command = false;
 
   for (size_t i = 0; i < info_.joints.size(); i++) {
     const bool has_fault = safety_config_.mask_faulted_axes &&
@@ -1067,6 +1307,10 @@ return_type ODriveHardwareInterface::write(const rclcpp::Time &, const rclcpp::D
       continue;
     }
 
+    if (joints_[i].control_level != AxisControlLevel::UNDEFINED) {
+      saw_any_valid_command = true;
+    }
+
     if (i < axis_faulted_.size() && axis_faulted_[i]) {
       axis_faulted_[i] = false;
     }
@@ -1084,6 +1328,27 @@ return_type ODriveHardwareInterface::write(const rclcpp::Time &, const rclcpp::D
         "writing axis command (" + failing_stage + ")";
       return to_io_return(status, action);
     }
+
+    if (safety_config_.require_fresh_commands) {
+      switch (joints_[i].control_level) {
+        case AxisControlLevel::POSITION:
+          joints_[i].command_position = std::numeric_limits<double>::quiet_NaN();
+          break;
+        case AxisControlLevel::VELOCITY:
+          joints_[i].command_velocity = std::numeric_limits<double>::quiet_NaN();
+          break;
+        case AxisControlLevel::EFFORT:
+          joints_[i].command_effort = std::numeric_limits<double>::quiet_NaN();
+          break;
+        case AxisControlLevel::UNDEFINED:
+        default:
+          break;
+      }
+    }
+  }
+
+  if (timeout_enabled && time_valid && any_active_control && saw_any_valid_command) {
+    last_valid_command_ns_.store(now_ns);
   }
 
   return return_type::OK;
