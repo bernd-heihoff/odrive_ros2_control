@@ -20,6 +20,7 @@
 #include <string>
 
 #include "hardware_interface/hardware_info.hpp"
+#include "odrive_hardware_interface/axis_control.hpp"
 #include "odrive_hardware_interface/axis_utils.hpp"
 #include "odrive_hardware_interface/odrive_hardware_interface.hpp"
 #include "test_support/fake_diagnostics.hpp"
@@ -129,7 +130,12 @@ TEST_F(CommandSafetyTest, RejectsNanCommands)
       {"wheel/" + std::string(hardware_interface::HW_IF_POSITION)},
       {}));
 
-  EXPECT_EQ(return_type::ERROR, interface.write(rclcpp::Time{}, rclcpp::Duration(0, 0)));
+  transport->expect_write(
+    serial,
+    axis_endpoint(odrive::AXIS__REQUESTED_STATE, axis),
+    static_cast<std::int32_t>(kAxisStateIdle));
+
+  EXPECT_EQ(return_type::OK, interface.write(rclcpp::Time{}, rclcpp::Duration(0, 0)));
   EXPECT_TRUE(transport->expectations_satisfied());
 }
 
@@ -220,7 +226,12 @@ TEST_F(CommandSafetyTest, RejectsCommandsOutsideLimits)
       {"wheel/" + std::string(hardware_interface::HW_IF_POSITION)},
       {}));
 
-  EXPECT_EQ(return_type::ERROR, interface.write(rclcpp::Time{}, rclcpp::Duration(0, 0)));
+  transport->expect_write(
+    serial,
+    axis_endpoint(odrive::AXIS__REQUESTED_STATE, axis),
+    static_cast<std::int32_t>(kAxisStateIdle));
+
+  EXPECT_EQ(return_type::OK, interface.write(rclcpp::Time{}, rclcpp::Duration(0, 0)));
   EXPECT_TRUE(transport->expectations_satisfied());
 }
 

@@ -1025,7 +1025,28 @@ return_type ODriveHardwareInterface::write(const rclcpp::Time &, const rclcpp::D
       extract_error_value(joints_[i].motor_error).has_value() ||
       extract_error_value(joints_[i].encoder_error).has_value() ||
       extract_error_value(joints_[i].controller_error).has_value());
-    if (has_fault) {
+    AxisCommandState command_state{
+      joints_[i].command_position,
+      joints_[i].command_velocity,
+      joints_[i].command_effort,
+      joints_[i].position,
+      joints_[i].velocity,
+      joints_[i].effort};
+
+    std::string validation_error;
+    const bool command_valid = validate_joint_command(
+      joints_[i].command_limits, joints_[i].control_level, command_state, validation_error);
+
+    const bool should_mask_axis = has_fault || !command_valid;
+    if (should_mask_axis) {
+      if (!command_valid) {
+        RCUTILS_LOG_ERROR_NAMED(
+          kLoggerName,
+          "Rejected command for joint '%s': %s",
+          info_.joints[i].name.c_str(),
+          validation_error.c_str());
+      }
+
       if (!axis_faulted_.empty()) {
         axis_faulted_[i] = true;
       }
@@ -1051,26 +1072,6 @@ return_type ODriveHardwareInterface::write(const rclcpp::Time &, const rclcpp::D
     }
     if (i < idle_requested_on_fault_.size() && idle_requested_on_fault_[i]) {
       idle_requested_on_fault_[i] = false;
-    }
-
-    AxisCommandState command_state{
-      joints_[i].command_position,
-      joints_[i].command_velocity,
-      joints_[i].command_effort,
-      joints_[i].position,
-      joints_[i].velocity,
-      joints_[i].effort};
-
-    std::string validation_error;
-    if (!validate_joint_command(
-        joints_[i].command_limits, joints_[i].control_level, command_state, validation_error))
-    {
-      RCUTILS_LOG_ERROR_NAMED(
-        kLoggerName,
-        "Rejected command for joint '%s': %s",
-        info_.joints[i].name.c_str(),
-        validation_error.c_str());
-      return return_type::ERROR;
     }
 
     std::string failing_stage;
