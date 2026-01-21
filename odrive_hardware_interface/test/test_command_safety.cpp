@@ -132,8 +132,16 @@ TEST_F(CommandSafetyTest, RejectsNanCommands)
 
   transport->expect_write(
     serial,
-    axis_endpoint(odrive::AXIS__REQUESTED_STATE, axis),
-    static_cast<std::int32_t>(kAxisStateIdle));
+    axis_endpoint(odrive::AXIS__CONTROLLER__INPUT_POS, axis),
+    0.0F);
+  transport->expect_write(
+    serial,
+    axis_endpoint(odrive::AXIS__CONTROLLER__INPUT_VEL, axis),
+    0.0F);
+  transport->expect_write(
+    serial,
+    axis_endpoint(odrive::AXIS__CONTROLLER__INPUT_TORQUE, axis),
+    0.0F);
 
   EXPECT_EQ(return_type::OK, interface.write(rclcpp::Time{}, rclcpp::Duration(0, 0)));
   EXPECT_TRUE(transport->expectations_satisfied());
@@ -228,8 +236,16 @@ TEST_F(CommandSafetyTest, RejectsCommandsOutsideLimits)
 
   transport->expect_write(
     serial,
-    axis_endpoint(odrive::AXIS__REQUESTED_STATE, axis),
-    static_cast<std::int32_t>(kAxisStateIdle));
+    axis_endpoint(odrive::AXIS__CONTROLLER__INPUT_POS, axis),
+    0.0F);
+  transport->expect_write(
+    serial,
+    axis_endpoint(odrive::AXIS__CONTROLLER__INPUT_VEL, axis),
+    0.0F);
+  transport->expect_write(
+    serial,
+    axis_endpoint(odrive::AXIS__CONTROLLER__INPUT_TORQUE, axis),
+    0.0F);
 
   EXPECT_EQ(return_type::OK, interface.write(rclcpp::Time{}, rclcpp::Duration(0, 0)));
   EXPECT_TRUE(transport->expectations_satisfied());
