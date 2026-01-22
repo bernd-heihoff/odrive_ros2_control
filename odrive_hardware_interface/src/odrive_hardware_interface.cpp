@@ -1096,16 +1096,27 @@ return_type ODriveHardwareInterface::write(const rclcpp::Time & time, const rclc
       if (first_fault) {
         RCUTILS_LOG_WARN_NAMED(
           kLoggerName,
-          "Masking commands for joint '%s' due to fault(s): axis=0x%016llx (%s) motor=0x%016llx (%s) encoder=0x%016llx (%s) controller=0x%016llx (%s). Last commanded effort=%.3f (control_level=%d).",
+          "Masking commands for joint '%s' due to fault(s): "
+          "axis=0x%016" PRIx64 " (%s) motor=0x%016" PRIx64 " (%s) "
+          "encoder=0x%016" PRIx64 " (%s) controller=0x%016" PRIx64 " (%s). "
+          "Last commanded effort=%.3f (control_level=%d).",
           info_.joints[i].name.c_str(),
-          axis_error_value ? static_cast<unsigned long long>(*axis_error_value) : 0ull,
+          axis_error_value ? static_cast<std::uint64_t>(*axis_error_value) : static_cast<std::
+          uint64_t>(0),
           axis_error_value ? describe_axis_error(*axis_error_value).c_str() : "",
-          motor_error_value ? static_cast<unsigned long long>(*motor_error_value) : 0ull,
+          motor_error_value ? static_cast<std::uint64_t>(*motor_error_value) : static_cast<std::
+          uint64_t>(0),
           motor_error_value ? describe_motor_error(*motor_error_value).c_str() : "",
-          encoder_error_value ? static_cast<unsigned long long>(*encoder_error_value) : 0ull,
-          encoder_error_value ? describe_encoder_error(*encoder_error_value).c_str() : "",
-          controller_error_value ? static_cast<unsigned long long>(*controller_error_value) : 0ull,
-          controller_error_value ? describe_controller_error(*controller_error_value).c_str() : "",
+          encoder_error_value ?
+          static_cast<std::uint64_t>(*encoder_error_value) :
+          static_cast<std::uint64_t>(0),
+          encoder_error_value ? describe_encoder_error(
+            *encoder_error_value).c_str() : "",
+          controller_error_value ?
+          static_cast<std::uint64_t>(*controller_error_value) :
+          static_cast<std::uint64_t>(0),
+          controller_error_value ? describe_controller_error(
+            *controller_error_value).c_str() : "",
           command_state.command_effort,
           static_cast<int>(joints_[i].control_level));
       }

@@ -15,11 +15,10 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
-#include <limits>
 #include <string>
+#include <vector>
 
 #include "hardware_interface/hardware_info.hpp"
-#include "odrive_hardware_interface/axis_control.hpp"
 #include "odrive_hardware_interface/axis_utils.hpp"
 #include "odrive_hardware_interface/odrive_hardware_interface.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -30,10 +29,6 @@ namespace odrive_hardware_interface
 {
 namespace
 {
-class SafetyGatingTest : public ::testing::Test
-{
-};
-
 class TestHardwareInterface : public ODriveHardwareInterface
 {
 public:
@@ -65,7 +60,20 @@ hardware_interface::HardwareInfo make_minimal_info(const std::string & serial_he
   return info;
 }
 
-TEST_F(SafetyGatingTest, WriteIsSkippedWhenInactiveEvenIfCommandModeSet)
+hardware_interface::StateInterface * find_state_interface(
+  std::vector<hardware_interface::StateInterface> & state_interfaces,
+  const std::string & prefix,
+  const std::string & interface_name)
+{
+  for (auto & state : state_interfaces) {
+    if (state.get_prefix_name() == prefix && state.get_interface_name() == interface_name) {
+      return &state;
+    }
+  }
+  return nullptr;
+}
+
+TEST(TransportErrorStateTest, ExportsTransportErrorStateInterface)
 {
   TestHardwareInterface interface;
   interface.set_diagnostics_factory(make_fake_diagnostics_factory());
@@ -95,25 +103,13 @@ TEST_F(SafetyGatingTest, WriteIsSkippedWhenInactiveEvenIfCommandModeSet)
   ASSERT_NE(nullptr, transport);
   EXPECT_TRUE(transport->expectations_satisfied());
 
-  auto command_interfaces = interface.export_command_interfaces();
-  for (auto & command : command_interfaces) {
-    if (command.get_prefix_name() == "wheel") {
-      command.set_value(0.0);
-    }
-  }
-
-  EXPECT_EQ(
-    return_type::OK,
-    interface.prepare_command_mode_switch(
-      {"wheel/" + std::string(hardware_interface::HW_IF_EFFORT)},
-      {}));
-
-  // Not activated: outputs must be gated.
-  EXPECT_EQ(return_type::OK, interface.write(rclcpp::Time{}, rclcpp::Duration(0, 0)));
-  EXPECT_TRUE(transport->expectations_satisfied());
+  auto state_interfaces = interface.export_state_interfaces();
+  auto * transport_error = find_state_interface(state_interfaces, "bus", "transport_error");
+  ASSERT_NE(nullptr, transport_error);
+  EXPECT_EQ(0.0, transport_error->get_value());
 }
 
-TEST_F(SafetyGatingTest, FaultedAxisIsMaskedAndIdled)
+TEST(TransportErrorStateTest, UpdatesOnVbusReadFailure)
 {
   TestHardwareInterface interface;
   interface.set_diagnostics_factory(make_fake_diagnostics_factory());
@@ -121,8 +117,8 @@ TEST_F(SafetyGatingTest, FaultedAxisIsMaskedAndIdled)
   const std::int64_t serial = 0x00000000000000B1LL;
   const int axis = 0;
   const float torque_constant = 2.0F;
-  MockTransport * transport = nullptr;
 
+  MockTransport * transport = nullptr;
   interface.set_transport_factory(
     [&]() {
       auto instance = std::make_unique<MockTransport>();
@@ -143,78 +139,66 @@ TEST_F(SafetyGatingTest, FaultedAxisIsMaskedAndIdled)
   ASSERT_NE(nullptr, transport);
   EXPECT_TRUE(transport->expectations_satisfied());
 
-  transport->expect_call(serial, axis_endpoint(odrive::AXIS__CLEAR_ERRORS, axis));
-  ASSERT_EQ(CallbackReturn::SUCCESS, interface.on_activate(rclcpp_lifecycle::State{}));
+  auto state_interfaces = interface.export_state_interfaces();
+  auto * transport_error = find_state_interface(state_interfaces, "bus", "transport_error");
+  ASSERT_NE(nullptr, transport_error);
+
+  const float vbus_voltage = 0.0F;
+  transport->expect_read(serial, odrive::VBUS_VOLTAGE, vbus_voltage, -5);
+
+  EXPECT_EQ(return_type::ERROR, interface.read(rclcpp::Time{}, rclcpp::Duration(0, 0)));
+  EXPECT_TRUE(transport->expectations_satisfied());
+  EXPECT_EQ(-5.0, transport_error->get_value());
+}
+
+TEST(TransportErrorStateTest, UpdatesOnAxisTelemetryReadFailure)
+{
+  TestHardwareInterface interface;
+  interface.set_diagnostics_factory(make_fake_diagnostics_factory());
+
+  const std::int64_t serial = 0x00000000000000C1LL;
+  const int axis = 0;
+  const float torque_constant = 2.0F;
+
+  MockTransport * transport = nullptr;
+  interface.set_transport_factory(
+    [&]() {
+      auto instance = std::make_unique<MockTransport>();
+      transport = instance.get();
+      instance->expect_read(
+        serial,
+        axis_endpoint(odrive::AXIS__MOTOR__CONFIG__TORQUE_CONSTANT, axis),
+        torque_constant);
+      instance->expect_write(
+        serial,
+        axis_endpoint(odrive::AXIS__CONFIG__ENABLE_WATCHDOG, axis),
+        static_cast<bool>(false));
+      return instance;
+    });
+
+  auto info = make_minimal_info("c1");
+  ASSERT_EQ(CallbackReturn::SUCCESS, interface.configure(info));
+  ASSERT_NE(nullptr, transport);
   EXPECT_TRUE(transport->expectations_satisfied());
 
-  // Provide a telemetry sample indicating an axis fault.
-  const float vbus_voltage = 24.0F;
-  const float iq_measured = 0.0F;
-  const float vel_estimate = 0.0F;
-  const float pos_estimate = 0.0F;
-  const int32_t axis_error = 0x00000001;
-  const int32_t motor_error = 0;
-  const int32_t encoder_error = 0;
-  const int32_t controller_error = 0;
-  const float fet_temperature = 30.0F;
-  const float motor_temperature = 30.0F;
+  auto state_interfaces = interface.export_state_interfaces();
+  auto * transport_error = find_state_interface(state_interfaces, "bus", "transport_error");
+  ASSERT_NE(nullptr, transport_error);
 
+  const float vbus_voltage = 24.0F;
   transport->expect_read(serial, odrive::VBUS_VOLTAGE, vbus_voltage);
+
+  // Fail the first telemetry read (motor current).
+  const float iq_measured = 0.0F;
   transport->expect_read(
     serial,
     axis_endpoint(odrive::AXIS__MOTOR__CURRENT_CONTROL__IQ_MEASURED, axis),
-    iq_measured);
-  transport->expect_read(
-    serial,
-    axis_endpoint(odrive::AXIS__ENCODER__VEL_ESTIMATE, axis),
-    vel_estimate);
-  transport->expect_read(
-    serial,
-    axis_endpoint(odrive::AXIS__ENCODER__POS_ESTIMATE, axis),
-    pos_estimate);
-  transport->expect_read(serial, axis_endpoint(odrive::AXIS__ERROR, axis), axis_error);
-  transport->expect_read(serial, axis_endpoint(odrive::AXIS__MOTOR__ERROR, axis), motor_error);
-  transport->expect_read(
-    serial,
-    axis_endpoint(odrive::AXIS__ENCODER__ERROR, axis),
-    encoder_error);
-  transport->expect_read(
-    serial,
-    axis_endpoint(odrive::AXIS__CONTROLLER__ERROR, axis),
-    controller_error);
-  transport->expect_read(
-    serial,
-    axis_endpoint(odrive::AXIS__FET_THERMISTOR__TEMPERATURE, axis),
-    fet_temperature);
-  transport->expect_read(
-    serial,
-    axis_endpoint(odrive::AXIS__MOTOR_THERMISTOR__TEMPERATURE, axis),
-    motor_temperature);
+    iq_measured,
+    -7);
 
-  EXPECT_EQ(return_type::OK, interface.read(rclcpp::Time{}, rclcpp::Duration(0, 0)));
+  EXPECT_EQ(return_type::ERROR, interface.read(rclcpp::Time{}, rclcpp::Duration(0, 0)));
   EXPECT_TRUE(transport->expectations_satisfied());
-
-  auto command_interfaces = interface.export_command_interfaces();
-  for (auto & command : command_interfaces) {
-    if (command.get_prefix_name() == "wheel") {
-      command.set_value(0.0);
-    }
-  }
-
-  EXPECT_EQ(
-    return_type::OK,
-    interface.prepare_command_mode_switch(
-      {"wheel/" + std::string(hardware_interface::HW_IF_EFFORT)},
-      {}));
-
-  // Masking should idle the faulted axis and skip the torque write.
-  transport->expect_write(
-    serial,
-    axis_endpoint(odrive::AXIS__REQUESTED_STATE, axis),
-    static_cast<std::int32_t>(kAxisStateIdle));
-
-  EXPECT_EQ(return_type::OK, interface.write(rclcpp::Time{}, rclcpp::Duration(0, 0)));
-  EXPECT_TRUE(transport->expectations_satisfied());
+  EXPECT_EQ(-7.0, transport_error->get_value());
 }
 
 }  // namespace
