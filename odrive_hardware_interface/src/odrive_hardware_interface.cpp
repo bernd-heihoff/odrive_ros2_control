@@ -46,7 +46,6 @@ namespace odrive_hardware_interface
 namespace
 {
 constexpr const char kLoggerName[] = "ODriveHardwareInterface";
-constexpr std::int16_t kOdriveErrorEndpoint = 0;
 constexpr const char * kDiagnosticsNodePrefix = "odrive_diagnostics_";
 
 DiagnosticsInterface::Duration seconds_to_duration(double seconds)
@@ -949,19 +948,13 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
     sensors_[i].vbus_voltage = vbus_voltage;
   }
 
+  // Note: System-level ODrive error polling is intentionally disabled.
+  // The ODrive native protocol reserves endpoint 0 for the JSON interface, which
+  // does not behave like a fixed-size int32 read. Treating it as such can cause
+  // spurious libusb IO errors (e.g. short reads) that interrupt the control loop.
+  // Per-axis errors (axis/motor/encoder/controller) are still read below.
   for (auto & drive : drives_) {
-    int32_t odrive_error = 0;
-    if (const int status =
-      transport_->read(drive.serial_number, kOdriveErrorEndpoint, odrive_error);
-      status != 0)
-    {
-      return to_io_return(status, "reading odrive error");
-    }
-
-    drive.odrive_error = static_cast<double>(odrive_error);
-    if (const auto drive_error_value = extract_error_value(drive.odrive_error)) {
-      log_odrive_error_transition(drive.label, *drive_error_value, drive.last_odrive_error);
-    }
+    drive.odrive_error = 0.0;
   }
 
   for (size_t i = 0; i < info_.joints.size(); i++) {
