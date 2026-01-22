@@ -188,6 +188,10 @@ void ODriveHardwareInterface::reset_runtime_state()
     joint.fet_temperature = std::numeric_limits<double>::quiet_NaN();
     joint.motor_temperature = std::numeric_limits<double>::quiet_NaN();
 
+    joint.read_error = 0.0;
+    joint.write_error = 0.0;
+    joint.telemetry_valid = 0.0;
+
     joint.torque_constant = std::numeric_limits<float>::quiet_NaN();
     joint.control_level = AxisControlLevel::UNDEFINED;
     joint.last_axis_error = 0;
@@ -590,6 +594,16 @@ std::vector<hardware_interface::StateInterface> ODriveHardwareInterface::export_
     state_interfaces.emplace_back(
       hardware_interface::StateInterface(
         info_.joints[i].name, "motor_temperature", &joints_[i].motor_temperature));
+
+    state_interfaces.emplace_back(
+      hardware_interface::StateInterface(
+        info_.joints[i].name, "read_error", &joints_[i].read_error));
+    state_interfaces.emplace_back(
+      hardware_interface::StateInterface(
+        info_.joints[i].name, "write_error", &joints_[i].write_error));
+    state_interfaces.emplace_back(
+      hardware_interface::StateInterface(
+        info_.joints[i].name, "telemetry_valid", &joints_[i].telemetry_valid));
   }
 
   return state_interfaces;
@@ -714,8 +728,14 @@ return_type ODriveHardwareInterface::perform_command_mode_switch(
     {
       std::string action = failing_stage.empty() ? "performing axis mode switch" :
         "performing axis mode switch (" + failing_stage + ")";
+
+      if (i < joints_.size()) {
+        joints_[i].write_error = static_cast<double>(status);
+      }
       return to_io_return(status, action);
     }
+
+    joints_[i].write_error = 0.0;
   }
 
   return return_type::OK;
@@ -983,30 +1003,36 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
   }
 
   for (size_t i = 0; i < info_.joints.size(); i++) {
-    AxisTelemetryBuffers buffers{
-      joints_[i].effort,
-      joints_[i].velocity,
-      joints_[i].position,
-      joints_[i].axis_error,
-      joints_[i].motor_error,
-      joints_[i].encoder_error,
-      joints_[i].controller_error,
-      joints_[i].fet_temperature,
-      joints_[i].motor_temperature};
+    AxisTelemetrySample sample;
     std::string failing_stage;
     if (const int status = read_axis_telemetry(
         *transport_, joints_[i].serial_number, joints_[i].axis, joints_[i].torque_constant,
-        buffers,
+        sample,
         failing_stage);
       status != 0)
     {
       if (const auto sensor_index = find_sensor_index(joints_[i].serial_number)) {
         sensors_[*sensor_index].transport_error = static_cast<double>(status);
       }
+
+      joints_[i].read_error = static_cast<double>(status);
+      joints_[i].telemetry_valid = 0.0;
       std::string action = failing_stage.empty() ? "reading axis telemetry" :
         "reading axis telemetry (" + failing_stage + ")";
       return to_io_return(status, action);
     }
+
+    joints_[i].effort = sample.effort;
+    joints_[i].velocity = sample.velocity;
+    joints_[i].position = sample.position;
+    joints_[i].axis_error = sample.axis_error;
+    joints_[i].motor_error = sample.motor_error;
+    joints_[i].encoder_error = sample.encoder_error;
+    joints_[i].controller_error = sample.controller_error;
+    joints_[i].fet_temperature = sample.fet_temperature;
+    joints_[i].motor_temperature = sample.motor_temperature;
+    joints_[i].read_error = 0.0;
+    joints_[i].telemetry_valid = 1.0;
 
     if (const auto sensor_index = find_sensor_index(joints_[i].serial_number)) {
       sensors_[*sensor_index].transport_error = 0.0;
@@ -1134,6 +1160,7 @@ return_type ODriveHardwareInterface::write(const rclcpp::Time & time, const rclc
           axis_endpoint(odrive::AXIS__REQUESTED_STATE, joints_[i].axis),
           requested_state);
         if (status != 0) {
+          joints_[i].write_error = static_cast<double>(status);
           return to_io_return(status, "requesting axis idle state after fault");
         }
         idle_requested_on_fault_[i] = true;
@@ -1160,8 +1187,12 @@ return_type ODriveHardwareInterface::write(const rclcpp::Time & time, const rclc
     {
       std::string action = failing_stage.empty() ? "writing axis command" :
         "writing axis command (" + failing_stage + ")";
+
+      joints_[i].write_error = static_cast<double>(status);
       return to_io_return(status, action);
     }
+
+    joints_[i].write_error = 0.0;
   }
 
   return return_type::OK;

@@ -27,7 +27,7 @@ int read_axis_telemetry(
   std::int64_t serial_number,
   int axis,
   float torque_constant,
-  AxisTelemetryBuffers buffers,
+  AxisTelemetrySample & sample,
   std::string & failing_stage)
 {
   float iq_measured = 0.0F;
@@ -40,7 +40,7 @@ int read_axis_telemetry(
   {
     return status;
   }
-  buffers.effort = static_cast<double>(iq_measured * torque_constant);
+  sample.effort = static_cast<double>(iq_measured * torque_constant);
 
   float vel_estimate = 0.0F;
   failing_stage = "reading velocity estimate";
@@ -52,7 +52,7 @@ int read_axis_telemetry(
   {
     return status;
   }
-  buffers.velocity = static_cast<double>(turns_to_radians(vel_estimate));
+  sample.velocity = static_cast<double>(turns_to_radians(vel_estimate));
 
   float pos_estimate = 0.0F;
   failing_stage = "reading position estimate";
@@ -64,7 +64,7 @@ int read_axis_telemetry(
   {
     return status;
   }
-  buffers.position = static_cast<double>(turns_to_radians(pos_estimate));
+  sample.position = static_cast<double>(turns_to_radians(pos_estimate));
 
   int32_t axis_error = 0;
   failing_stage = "reading axis error";
@@ -76,7 +76,7 @@ int read_axis_telemetry(
   {
     return status;
   }
-  buffers.axis_error = static_cast<double>(axis_error);
+  sample.axis_error = static_cast<double>(axis_error);
 
   int32_t motor_error = 0;
   failing_stage = "reading motor error";
@@ -88,7 +88,7 @@ int read_axis_telemetry(
   {
     return status;
   }
-  buffers.motor_error = static_cast<double>(motor_error);
+  sample.motor_error = static_cast<double>(motor_error);
 
   int32_t encoder_error = 0;
   failing_stage = "reading encoder error";
@@ -100,7 +100,7 @@ int read_axis_telemetry(
   {
     return status;
   }
-  buffers.encoder_error = static_cast<double>(encoder_error);
+  sample.encoder_error = static_cast<double>(encoder_error);
 
   int32_t controller_error = 0;
   failing_stage = "reading controller error";
@@ -112,7 +112,7 @@ int read_axis_telemetry(
   {
     return status;
   }
-  buffers.controller_error = static_cast<double>(controller_error);
+  sample.controller_error = static_cast<double>(controller_error);
 
   float fet_temperature = NAN;
   failing_stage = "reading fet temperature";
@@ -124,7 +124,7 @@ int read_axis_telemetry(
   {
     return status;
   }
-  buffers.fet_temperature = static_cast<double>(fet_temperature);
+  sample.fet_temperature = static_cast<double>(fet_temperature);
 
   float motor_temperature = NAN;
   failing_stage = "reading motor temperature";
@@ -136,7 +136,7 @@ int read_axis_telemetry(
   {
     return status;
   }
-  buffers.motor_temperature = static_cast<double>(motor_temperature);
+  sample.motor_temperature = static_cast<double>(motor_temperature);
 
   failing_stage.clear();
   return 0;

@@ -60,6 +60,22 @@ hardware_interface::HardwareInfo make_minimal_info(const std::string & serial_he
   return info;
 }
 
+hardware_interface::HardwareInfo make_minimal_info_no_sensors(const std::string & serial_hex)
+{
+  hardware_interface::HardwareInfo info;
+  info.hardware_parameters["publish_diagnostics"] = "false";
+
+  hardware_interface::ComponentInfo joint;
+  joint.name = "wheel";
+  joint.parameters["serial_number"] = serial_hex;
+  joint.parameters["axis"] = "0";
+  joint.parameters["watchdog_timeout"] = "0.10";
+  joint.parameters["enable_watchdog"] = "false";
+  info.joints.push_back(joint);
+
+  return info;
+}
+
 hardware_interface::StateInterface * find_state_interface(
   std::vector<hardware_interface::StateInterface> & state_interfaces,
   const std::string & prefix,
@@ -107,6 +123,48 @@ TEST(TransportErrorStateTest, ExportsTransportErrorStateInterface)
   auto * transport_error = find_state_interface(state_interfaces, "bus", "transport_error");
   ASSERT_NE(nullptr, transport_error);
   EXPECT_EQ(0.0, transport_error->get_value());
+}
+
+TEST(TransportErrorStateTest, ExportsJointIoStateInterfaces)
+{
+  TestHardwareInterface interface;
+  interface.set_diagnostics_factory(make_fake_diagnostics_factory());
+
+  const std::int64_t serial = 0x00000000000000D1LL;
+  const int axis = 0;
+  const float torque_constant = 2.0F;
+
+  MockTransport * transport = nullptr;
+  interface.set_transport_factory(
+    [&]() {
+      auto instance = std::make_unique<MockTransport>();
+      transport = instance.get();
+      instance->expect_read(
+        serial,
+        axis_endpoint(odrive::AXIS__MOTOR__CONFIG__TORQUE_CONSTANT, axis),
+        torque_constant);
+      instance->expect_write(
+        serial,
+        axis_endpoint(odrive::AXIS__CONFIG__ENABLE_WATCHDOG, axis),
+        static_cast<bool>(false));
+      return instance;
+    });
+
+  auto info = make_minimal_info_no_sensors("d1");
+  ASSERT_EQ(CallbackReturn::SUCCESS, interface.configure(info));
+  ASSERT_NE(nullptr, transport);
+  EXPECT_TRUE(transport->expectations_satisfied());
+
+  auto state_interfaces = interface.export_state_interfaces();
+  auto * read_error = find_state_interface(state_interfaces, "wheel", "read_error");
+  auto * write_error = find_state_interface(state_interfaces, "wheel", "write_error");
+  auto * telemetry_valid = find_state_interface(state_interfaces, "wheel", "telemetry_valid");
+  ASSERT_NE(nullptr, read_error);
+  ASSERT_NE(nullptr, write_error);
+  ASSERT_NE(nullptr, telemetry_valid);
+  EXPECT_EQ(0.0, read_error->get_value());
+  EXPECT_EQ(0.0, write_error->get_value());
+  EXPECT_EQ(0.0, telemetry_valid->get_value());
 }
 
 TEST(TransportErrorStateTest, UpdatesOnVbusReadFailure)
@@ -199,6 +257,56 @@ TEST(TransportErrorStateTest, UpdatesOnAxisTelemetryReadFailure)
   EXPECT_EQ(return_type::ERROR, interface.read(rclcpp::Time{}, rclcpp::Duration(0, 0)));
   EXPECT_TRUE(transport->expectations_satisfied());
   EXPECT_EQ(-7.0, transport_error->get_value());
+}
+
+TEST(TransportErrorStateTest, UpdatesJointReadErrorWhenNoSensors)
+{
+  TestHardwareInterface interface;
+  interface.set_diagnostics_factory(make_fake_diagnostics_factory());
+
+  const std::int64_t serial = 0x00000000000000E1LL;
+  const int axis = 0;
+  const float torque_constant = 2.0F;
+
+  MockTransport * transport = nullptr;
+  interface.set_transport_factory(
+    [&]() {
+      auto instance = std::make_unique<MockTransport>();
+      transport = instance.get();
+      instance->expect_read(
+        serial,
+        axis_endpoint(odrive::AXIS__MOTOR__CONFIG__TORQUE_CONSTANT, axis),
+        torque_constant);
+      instance->expect_write(
+        serial,
+        axis_endpoint(odrive::AXIS__CONFIG__ENABLE_WATCHDOG, axis),
+        static_cast<bool>(false));
+      return instance;
+    });
+
+  auto info = make_minimal_info_no_sensors("e1");
+  ASSERT_EQ(CallbackReturn::SUCCESS, interface.configure(info));
+  ASSERT_NE(nullptr, transport);
+  EXPECT_TRUE(transport->expectations_satisfied());
+
+  auto state_interfaces = interface.export_state_interfaces();
+  auto * read_error = find_state_interface(state_interfaces, "wheel", "read_error");
+  auto * telemetry_valid = find_state_interface(state_interfaces, "wheel", "telemetry_valid");
+  ASSERT_NE(nullptr, read_error);
+  ASSERT_NE(nullptr, telemetry_valid);
+
+  // Fail the first telemetry read (motor current).
+  const float iq_measured = 0.0F;
+  transport->expect_read(
+    serial,
+    axis_endpoint(odrive::AXIS__MOTOR__CURRENT_CONTROL__IQ_MEASURED, axis),
+    iq_measured,
+    -11);
+
+  EXPECT_EQ(return_type::ERROR, interface.read(rclcpp::Time{}, rclcpp::Duration(0, 0)));
+  EXPECT_TRUE(transport->expectations_satisfied());
+  EXPECT_EQ(-11.0, read_error->get_value());
+  EXPECT_EQ(0.0, telemetry_valid->get_value());
 }
 
 }  // namespace

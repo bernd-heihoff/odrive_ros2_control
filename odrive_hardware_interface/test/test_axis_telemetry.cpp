@@ -33,26 +33,7 @@ TEST(AxisTelemetryTest, ReadTelemetryAppliesConversions)
 {
   MockTransport transport;
 
-  double telemetry_effort = std::numeric_limits<double>::quiet_NaN();
-  double telemetry_velocity = std::numeric_limits<double>::quiet_NaN();
-  double telemetry_position = std::numeric_limits<double>::quiet_NaN();
-  double telemetry_axis_error = std::numeric_limits<double>::quiet_NaN();
-  double telemetry_motor_error = std::numeric_limits<double>::quiet_NaN();
-  double telemetry_encoder_error = std::numeric_limits<double>::quiet_NaN();
-  double telemetry_controller_error = std::numeric_limits<double>::quiet_NaN();
-  double telemetry_fet_temperature = std::numeric_limits<double>::quiet_NaN();
-  double telemetry_motor_temperature = std::numeric_limits<double>::quiet_NaN();
-
-  AxisTelemetryBuffers buffers{
-    telemetry_effort,
-    telemetry_velocity,
-    telemetry_position,
-    telemetry_axis_error,
-    telemetry_motor_error,
-    telemetry_encoder_error,
-    telemetry_controller_error,
-    telemetry_fet_temperature,
-    telemetry_motor_temperature};
+  AxisTelemetrySample sample;
 
   const float iq_measured = 3.0F;
   const float vel_estimate = 2.0F;
@@ -85,20 +66,20 @@ TEST(AxisTelemetryTest, ReadTelemetryAppliesConversions)
   std::string failing_stage;
   const float torque_constant = 2.0F;
   const int status = read_axis_telemetry(
-    transport, kSerial, kAxis, torque_constant, buffers, failing_stage);
+    transport, kSerial, kAxis, torque_constant, sample, failing_stage);
 
   EXPECT_EQ(0, status);
   EXPECT_TRUE(failing_stage.empty());
 
-  EXPECT_DOUBLE_EQ(iq_measured * torque_constant, telemetry_effort);
-  EXPECT_NEAR(vel_estimate * 2.0 * M_PI, telemetry_velocity, 1e-6);
-  EXPECT_NEAR(pos_estimate * 2.0 * M_PI, telemetry_position, 1e-6);
-  EXPECT_DOUBLE_EQ(axis_error, telemetry_axis_error);
-  EXPECT_DOUBLE_EQ(motor_error, telemetry_motor_error);
-  EXPECT_DOUBLE_EQ(encoder_error, telemetry_encoder_error);
-  EXPECT_DOUBLE_EQ(controller_error, telemetry_controller_error);
-  EXPECT_DOUBLE_EQ(fet_temp, telemetry_fet_temperature);
-  EXPECT_DOUBLE_EQ(motor_temp, telemetry_motor_temperature);
+  EXPECT_DOUBLE_EQ(iq_measured * torque_constant, sample.effort);
+  EXPECT_NEAR(vel_estimate * 2.0 * M_PI, sample.velocity, 1e-6);
+  EXPECT_NEAR(pos_estimate * 2.0 * M_PI, sample.position, 1e-6);
+  EXPECT_DOUBLE_EQ(axis_error, sample.axis_error);
+  EXPECT_DOUBLE_EQ(motor_error, sample.motor_error);
+  EXPECT_DOUBLE_EQ(encoder_error, sample.encoder_error);
+  EXPECT_DOUBLE_EQ(controller_error, sample.controller_error);
+  EXPECT_DOUBLE_EQ(fet_temp, sample.fet_temperature);
+  EXPECT_DOUBLE_EQ(motor_temp, sample.motor_temperature);
 
   EXPECT_TRUE(transport.expectations_satisfied());
 }
@@ -106,33 +87,15 @@ TEST(AxisTelemetryTest, ReadTelemetryAppliesConversions)
 TEST(AxisTelemetryTest, PropagatesTransportErrorStage)
 {
   MockTransport transport;
-  double effort = 0.0;
-  double velocity = 0.0;
-  double position = 0.0;
-  double axis_error = 0.0;
-  double motor_error = 0.0;
-  double encoder_error = 0.0;
-  double controller_error = 0.0;
-  double fet_temp = 0.0;
-  double motor_temp = 0.0;
 
-  AxisTelemetryBuffers buffers{
-    effort,
-    velocity,
-    position,
-    axis_error,
-    motor_error,
-    encoder_error,
-    controller_error,
-    fet_temp,
-    motor_temp};
+  AxisTelemetrySample sample;
 
   transport.expect_read(
     kSerial, axis_endpoint(odrive::AXIS__MOTOR__CURRENT_CONTROL__IQ_MEASURED, kAxis), 0.0F, -7);
 
   std::string failing_stage;
   const int status = read_axis_telemetry(
-    transport, kSerial, kAxis, 1.0F, buffers, failing_stage);
+    transport, kSerial, kAxis, 1.0F, sample, failing_stage);
 
   EXPECT_EQ(-7, status);
   EXPECT_EQ("reading motor current", failing_stage);

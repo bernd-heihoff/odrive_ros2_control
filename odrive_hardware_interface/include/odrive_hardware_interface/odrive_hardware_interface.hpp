@@ -173,6 +173,13 @@ private:
     double fet_temperature{std::numeric_limits<double>::quiet_NaN()};
     double motor_temperature{std::numeric_limits<double>::quiet_NaN()};
 
+    // 0.0 means OK; non-zero holds the last transport error code.
+    double read_error{0.0};
+    // 0.0 means OK; non-zero holds the last transport error code.
+    double write_error{0.0};
+    // 1.0 means the latest telemetry sample is complete; 0.0 otherwise.
+    double telemetry_valid{0.0};
+
     AxisControlLevel control_level{AxisControlLevel::UNDEFINED};
     JointConfig::CommandLimits command_limits;
     std::uint64_t last_axis_error{0};

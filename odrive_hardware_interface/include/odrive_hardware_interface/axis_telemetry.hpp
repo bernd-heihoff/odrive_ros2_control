@@ -21,17 +21,17 @@
 
 namespace odrive_hardware_interface
 {
-struct AxisTelemetryBuffers
+struct AxisTelemetrySample
 {
-  double & effort;
-  double & velocity;
-  double & position;
-  double & axis_error;
-  double & motor_error;
-  double & encoder_error;
-  double & controller_error;
-  double & fet_temperature;
-  double & motor_temperature;
+  double effort{0.0};
+  double velocity{0.0};
+  double position{0.0};
+  double axis_error{0.0};
+  double motor_error{0.0};
+  double encoder_error{0.0};
+  double controller_error{0.0};
+  double fet_temperature{0.0};
+  double motor_temperature{0.0};
 };
 
 /// Read all telemetry values for a single axis.
@@ -41,6 +41,6 @@ int read_axis_telemetry(
   std::int64_t serial_number,
   int axis,
   float torque_constant,
-  AxisTelemetryBuffers buffers,
+  AxisTelemetrySample & sample,
   std::string & failing_stage);
 }  // namespace odrive_hardware_interface

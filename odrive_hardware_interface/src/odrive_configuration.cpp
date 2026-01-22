@@ -127,10 +127,8 @@ bool parse_hardware_configuration(
   parsed.sensors.reserve(info.sensors.size());
   parsed.joints.reserve(info.joints.size());
 
-  if (info.sensors.empty()) {
-    error_message = "No sensors defined in hardware info.";
-    return false;
-  }
+  // Sensors are optional: deployments that do not monitor bus voltage can omit
+  // them and rely on joint telemetry/error state instead.
   if (info.joints.empty()) {
     error_message = "No joints defined in hardware info.";
     return false;
