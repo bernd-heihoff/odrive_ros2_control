@@ -103,6 +103,8 @@ public:
     drives_.emplace_back();
     drives_.back().label = label;
     drives_.back().serial_number = serial;
+    drives_.back().can_error = 0;
+    drives_.back().can_error_read_error = 0.0;
     return drives_.back();
   }
 

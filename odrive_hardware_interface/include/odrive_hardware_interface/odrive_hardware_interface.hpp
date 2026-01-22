@@ -147,6 +147,11 @@ private:
   {
     std::int64_t serial_number{0};
     std::string label;
+
+    // ODrive CAN interface error bitfield (odrivetool: odrv0.can.error).
+    std::uint32_t can_error{0};
+    // 0 means OK; non-zero holds the last transport error code while reading can_error.
+    double can_error_read_error{0.0};
   };
 
   struct JointContext

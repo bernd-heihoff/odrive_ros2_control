@@ -905,9 +905,73 @@ void ODriveHardwareInterface::populate_drive_diagnostics(
 {
   const auto & drive = drives_[index];
 
-  status.summary(diagnostic_msgs::msg::DiagnosticStatus::OK, "Nominal");
+  bool fault_detected = false;
+  bool warning_detected = false;
+  std::vector<std::string> messages;
+
   status.add("drive", drive.label);
   status.add("serial", serial_to_hex(drive.serial_number));
+
+  status.add("can.read_error", drive.can_error_read_error);
+  status.addf("can.error_bits", "0x%08" PRIX32, drive.can_error);
+
+  if (drive.can_error_read_error != 0.0) {
+    fault_detected = true;
+    messages.emplace_back("can.error unavailable");
+  } else if (drive.can_error != 0U) {
+    warning_detected = true;
+    messages.emplace_back("can.error set");
+  }
+
+  std::size_t joint_count = 0;
+  std::size_t io_faulted_joints = 0;
+  std::size_t faulted_joints = 0;
+  for (std::size_t i = 0; i < joints_.size() && i < info_.joints.size(); ++i) {
+    if (joints_[i].serial_number != drive.serial_number) {
+      continue;
+    }
+    ++joint_count;
+
+    const bool io_fault = (joints_[i].telemetry_valid < 0.5) ||
+      (joints_[i].read_error != 0.0) || (joints_[i].write_error != 0.0);
+    if (io_fault) {
+      ++io_faulted_joints;
+    }
+
+    const bool axis_fault = extract_error_value(joints_[i].axis_error).has_value() ||
+      extract_error_value(joints_[i].motor_error).has_value() ||
+      extract_error_value(joints_[i].encoder_error).has_value() ||
+      extract_error_value(joints_[i].controller_error).has_value();
+    if (axis_fault) {
+      ++faulted_joints;
+    }
+  }
+
+  status.add("joint_count", static_cast<int>(joint_count));
+  status.add("io_faulted_joints", static_cast<int>(io_faulted_joints));
+  status.add("faulted_joints", static_cast<int>(faulted_joints));
+
+  if (io_faulted_joints > 0) {
+    fault_detected = true;
+    messages.emplace_back("joint IO fault(s)");
+  }
+  if (faulted_joints > 0) {
+    warning_detected = true;
+    messages.emplace_back("axis fault(s)");
+  }
+
+  const auto summary_text = join_messages(messages);
+  if (fault_detected) {
+    status.summary(
+      diagnostic_msgs::msg::DiagnosticStatus::ERROR,
+      summary_text.empty() ? "Fault detected" : summary_text);
+  } else if (warning_detected) {
+    status.summary(
+      diagnostic_msgs::msg::DiagnosticStatus::WARN,
+      summary_text.empty() ? "Warning" : summary_text);
+  } else {
+    status.summary(diagnostic_msgs::msg::DiagnosticStatus::OK, "Nominal");
+  }
 }
 
 void ODriveHardwareInterface::populate_sensor_diagnostics(
@@ -971,6 +1035,20 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
     }
     sensors_[i].vbus_voltage = vbus_voltage;
     sensors_[i].transport_error = 0.0;
+  }
+
+  // Drive-level diagnostics: read firmware-supported ODrive CAN error bitfield.
+  // This is a fixed-size endpoint (unlike the JSON endpoint 0) and is safe to poll.
+  for (auto & drive : drives_) {
+    std::uint32_t can_error = 0;
+    const int status = transport_->read(drive.serial_number, odrive::CAN__ERROR, can_error);
+    if (status != 0) {
+      drive.can_error_read_error = static_cast<double>(status);
+      drive.can_error = 0;
+      continue;
+    }
+    drive.can_error_read_error = 0.0;
+    drive.can_error = can_error;
   }
 
   // Note: This firmware/API snapshot does not provide a fixed-size "top-level" drive error

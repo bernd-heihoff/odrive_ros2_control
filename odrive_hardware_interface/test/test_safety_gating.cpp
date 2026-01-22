@@ -160,6 +160,8 @@ TEST_F(SafetyGatingTest, FaultedAxisIsMaskedAndIdled)
   const float motor_temperature = 30.0F;
 
   transport->expect_read(serial, odrive::VBUS_VOLTAGE, vbus_voltage);
+  const std::uint32_t can_error = 0U;
+  transport->expect_read(serial, odrive::CAN__ERROR, can_error);
   transport->expect_read(
     serial,
     axis_endpoint(odrive::AXIS__MOTOR__CURRENT_CONTROL__IQ_MEASURED, axis),

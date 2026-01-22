@@ -246,6 +246,9 @@ TEST(TransportErrorStateTest, UpdatesOnAxisTelemetryReadFailure)
   const float vbus_voltage = 24.0F;
   transport->expect_read(serial, odrive::VBUS_VOLTAGE, vbus_voltage);
 
+  const std::uint32_t can_error = 0U;
+  transport->expect_read(serial, odrive::CAN__ERROR, can_error);
+
   // Fail the first telemetry read (motor current).
   const float iq_measured = 0.0F;
   transport->expect_read(
@@ -294,6 +297,9 @@ TEST(TransportErrorStateTest, UpdatesJointReadErrorWhenNoSensors)
   auto * telemetry_valid = find_state_interface(state_interfaces, "wheel", "telemetry_valid");
   ASSERT_NE(nullptr, read_error);
   ASSERT_NE(nullptr, telemetry_valid);
+
+  const std::uint32_t can_error = 0U;
+  transport->expect_read(serial, odrive::CAN__ERROR, can_error);
 
   // Fail the first telemetry read (motor current).
   const float iq_measured = 0.0F;
