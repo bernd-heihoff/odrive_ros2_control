@@ -147,8 +147,6 @@ private:
   {
     std::int64_t serial_number{0};
     std::string label;
-    double odrive_error{std::numeric_limits<double>::quiet_NaN()};
-    std::uint64_t last_odrive_error{0};
   };
 
   struct JointContext

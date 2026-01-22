@@ -35,9 +35,6 @@ std::string describe_encoder_error(std::uint64_t value);
 /// Produce a comma-separated textual description for controller error flags.
 std::string describe_controller_error(std::uint64_t value);
 
-/// Produce a comma-separated textual description for top-level ODrive error flags.
-std::string describe_odrive_error(std::uint64_t value);
-
 /// Log axis error bit transitions for a joint using the rcutils logging system.
 void log_axis_error_transition(
   const std::string & joint_name,
@@ -58,12 +55,6 @@ void log_encoder_error_transition(
 
 /// Log controller error bit transitions for a joint using the rcutils logging system.
 void log_controller_error_transition(
-  const std::string & joint_name,
-  std::uint64_t current,
-  std::uint64_t & last);
-
-/// Log top-level ODrive error bit transitions using the rcutils logging system.
-void log_odrive_error_transition(
   const std::string & joint_name,
   std::uint64_t current,
   std::uint64_t & last);

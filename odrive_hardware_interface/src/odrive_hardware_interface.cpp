@@ -167,11 +167,6 @@ void ODriveHardwareInterface::reset_runtime_state()
     sensor.transport_error = 0.0;
   }
 
-  for (auto & drive : drives_) {
-    drive.odrive_error = std::numeric_limits<double>::quiet_NaN();
-    drive.last_odrive_error = 0;
-  }
-
   for (auto & joint : joints_) {
     joint.command_position = std::numeric_limits<double>::quiet_NaN();
     joint.command_velocity = std::numeric_limits<double>::quiet_NaN();
@@ -748,7 +743,7 @@ void ODriveHardwareInterface::register_diagnostics_tasks()
   }
 
   for (std::size_t i = 0; i < drives_.size(); ++i) {
-    const auto task_name = std::string("ODrive/") + drives_[i].label;
+    const auto task_name = std::string("ODrive/drive/") + drives_[i].label;
     diagnostics_->add_task(
       task_name,
       [this, i](diagnostic_updater::DiagnosticStatusWrapper & status) {
@@ -757,7 +752,7 @@ void ODriveHardwareInterface::register_diagnostics_tasks()
   }
 
   for (std::size_t i = 0; i < joints_.size(); ++i) {
-    const auto task_name = std::string("ODrive/") + info_.joints[i].name + "/axis";
+    const auto task_name = std::string("ODrive/joint/") + info_.joints[i].name;
     diagnostics_->add_task(
       task_name,
       [this, i](diagnostic_updater::DiagnosticStatusWrapper & status) {
@@ -766,7 +761,7 @@ void ODriveHardwareInterface::register_diagnostics_tasks()
   }
 
   for (std::size_t i = 0; i < sensors_.size(); ++i) {
-    const auto task_name = std::string("ODrive/") + info_.sensors[i].name + "/power";
+    const auto task_name = std::string("ODrive/sensor/") + info_.sensors[i].name;
     diagnostics_->add_task(
       task_name,
       [this, i](diagnostic_updater::DiagnosticStatusWrapper & status) {
@@ -811,26 +806,29 @@ void ODriveHardwareInterface::populate_joint_diagnostics(
   std::vector<std::string> messages;
 
   status.summary(diagnostic_msgs::msg::DiagnosticStatus::OK, "Nominal");
-  status.add("Joint", joint_info.name);
-  status.add("Axis", joint.axis);
-  status.add("Serial", serial_to_hex(joint.serial_number));
-  status.add("Watchdog enabled", joint.enable_watchdog ? "true" : "false");
+  status.add("joint", joint_info.name);
+  status.add("axis", joint.axis);
+  status.add("serial", serial_to_hex(joint.serial_number));
+  status.add("watchdog_enabled", joint.enable_watchdog ? "true" : "false");
+  status.add("telemetry_valid", joint.telemetry_valid);
+  status.add("io.read_error", joint.read_error);
+  status.add("io.write_error", joint.write_error);
 
   const auto add_error_info = [&status, &messages, &fault_detected](
-    const char * label,
+    const char * prefix,
     const std::optional<std::uint64_t> & value,
     const std::string & description) {
-      const std::string bits_key = std::string(label) + " error bits";
-      const std::string desc_key = std::string(label) + " error flags";
+      const std::string bits_key = std::string(prefix) + ".error_bits";
+      const std::string desc_key = std::string(prefix) + ".error_flags";
       if (value) {
         status.addf(bits_key, "0x%016" PRIX64, *value);
         if (!description.empty()) {
           status.add(desc_key, description);
-          messages.emplace_back(std::string(label) + ": " + description);
+          messages.emplace_back(std::string(prefix) + ": " + description);
         } else {
           status.add(desc_key, "(no description)");
           std::ostringstream stream;
-          stream << std::string(label) << ": 0x" << std::uppercase << std::hex << *value;
+          stream << std::string(prefix) << ": 0x" << std::uppercase << std::hex << *value;
           messages.emplace_back(stream.str());
         }
         fault_detected = true;
@@ -846,22 +844,22 @@ void ODriveHardwareInterface::populate_joint_diagnostics(
   const auto controller_error_value = extract_error_value(joint.controller_error);
 
   add_error_info(
-    "Axis",
+    "axis",
     axis_error_value,
     axis_error_value ? describe_axis_error(*axis_error_value) : std::string{});
 
   add_error_info(
-    "Motor",
+    "motor",
     motor_error_value,
     motor_error_value ? describe_motor_error(*motor_error_value) : std::string{});
 
   add_error_info(
-    "Encoder",
+    "encoder",
     encoder_error_value,
     encoder_error_value ? describe_encoder_error(*encoder_error_value) : std::string{});
 
   add_error_info(
-    "Controller",
+    "controller",
     controller_error_value,
     controller_error_value ? describe_controller_error(*controller_error_value) : std::string{});
 
@@ -884,8 +882,8 @@ void ODriveHardwareInterface::populate_joint_diagnostics(
       }
     };
 
-  assess_temperature("FET temperature [C]", joint.fet_temperature);
-  assess_temperature("Motor temperature [C]", joint.motor_temperature);
+  assess_temperature("temperature.fet_c", joint.fet_temperature);
+  assess_temperature("temperature.motor_c", joint.motor_temperature);
 
   const auto summary_text = join_messages(messages);
   if (fault_detected) {
@@ -908,26 +906,8 @@ void ODriveHardwareInterface::populate_drive_diagnostics(
   const auto & drive = drives_[index];
 
   status.summary(diagnostic_msgs::msg::DiagnosticStatus::OK, "Nominal");
-  status.add("Drive", drive.label);
-  status.add("Serial", serial_to_hex(drive.serial_number));
-
-  const auto drive_error = extract_error_value(drive.odrive_error);
-  if (drive_error) {
-    const auto description = describe_odrive_error(*drive_error);
-    status.addf("ODrive error bits", "0x%016" PRIX64, *drive_error);
-    if (!description.empty()) {
-      status.add("ODrive error flags", description);
-      status.summary(diagnostic_msgs::msg::DiagnosticStatus::ERROR, description);
-    } else {
-      status.add("ODrive error flags", "(no description)");
-      std::ostringstream stream;
-      stream << "0x" << std::uppercase << std::hex << *drive_error;
-      status.summary(diagnostic_msgs::msg::DiagnosticStatus::ERROR, stream.str());
-    }
-  } else {
-    status.add("ODrive error bits", "0x0");
-    status.add("ODrive error flags", "(none)");
-  }
+  status.add("drive", drive.label);
+  status.add("serial", serial_to_hex(drive.serial_number));
 }
 
 void ODriveHardwareInterface::populate_sensor_diagnostics(
@@ -938,13 +918,13 @@ void ODriveHardwareInterface::populate_sensor_diagnostics(
   const auto & sensor = sensors_[index];
 
   status.summary(diagnostic_msgs::msg::DiagnosticStatus::OK, "Nominal");
-  status.add("Sensor", sensor_info.name);
-  status.add("Serial", serial_to_hex(sensor.serial_number));
+  status.add("sensor", sensor_info.name);
+  status.add("serial", serial_to_hex(sensor.serial_number));
 
   if (std::isfinite(sensor.vbus_voltage)) {
-    status.add("Vbus voltage [V]", sensor.vbus_voltage);
+    status.add("vbus_voltage_v", sensor.vbus_voltage);
   } else {
-    status.add("Vbus voltage [V]", "NaN");
+    status.add("vbus_voltage_v", "NaN");
     status.summary(diagnostic_msgs::msg::DiagnosticStatus::WARN, "Voltage unavailable");
   }
 }
@@ -993,14 +973,9 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
     sensors_[i].transport_error = 0.0;
   }
 
-  // Note: System-level ODrive error polling is intentionally disabled.
-  // The ODrive native protocol reserves endpoint 0 for the JSON interface, which
-  // does not behave like a fixed-size int32 read. Treating it as such can cause
-  // spurious libusb IO errors (e.g. short reads) that interrupt the control loop.
-  // Per-axis errors (axis/motor/encoder/controller) are still read below.
-  for (auto & drive : drives_) {
-    drive.odrive_error = 0.0;
-  }
+  // Note: This firmware/API snapshot does not provide a fixed-size "top-level" drive error
+  // endpoint (odrivetool also shows no root-level odrv0.error). Per-axis errors
+  // (axis/motor/encoder/controller) are read below.
 
   for (size_t i = 0; i < info_.joints.size(); i++) {
     AxisTelemetrySample sample;

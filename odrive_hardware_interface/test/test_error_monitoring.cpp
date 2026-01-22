@@ -128,23 +128,5 @@ TEST(ErrorMonitoringTest, AxisErrorTransitionLogsDecodedBits)
   EXPECT_TRUE(ScopedLogCapture::logs().empty());
 }
 
-TEST(ErrorMonitoringTest, ODriveErrorTransitionCapturesMultipleBits)
-{
-  ScopedLogCapture capture;
-  ASSERT_EQ(
-    RCUTILS_RET_OK,
-    rcutils_logging_set_logger_level(kLoggerName, RCUTILS_LOG_SEVERITY_WARN));
-
-  std::uint64_t last = 0x0000000000000010ULL;
-  log_odrive_error_transition("drive:123", 0x0000000000000018ULL, last);
-
-  const auto logs = ScopedLogCapture::logs();
-  ASSERT_EQ(1u, logs.size());
-  EXPECT_NE(std::string::npos, logs[0].find("drive:123"));
-  EXPECT_NE(std::string::npos, logs[0].find("0x0000000000000018"));
-  EXPECT_NE(std::string::npos, logs[0].find("dc_bus_over_regen_current"));
-  EXPECT_NE(std::string::npos, logs[0].find("dc_bus_over_current"));
-  EXPECT_EQ(0x0000000000000018ULL, last);
-}
 }  // namespace
 }  // namespace odrive_hardware_interface

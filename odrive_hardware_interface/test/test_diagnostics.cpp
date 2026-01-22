@@ -316,14 +316,14 @@ TEST(DiagnosticsTest, JointAggregatesAxisErrorsAndTemperatureFaults)
   helper.populate_joint_status(status, 0);
 
   EXPECT_EQ(diagnostic_msgs::msg::DiagnosticStatus::ERROR, status.level);
-  EXPECT_NE(std::string::npos, status.message.find("Axis: encoder_failed"));
-  EXPECT_NE(std::string::npos, status.message.find("Motor temperature [C] high"));
+  EXPECT_NE(std::string::npos, status.message.find("axis: encoder_failed"));
+  EXPECT_NE(std::string::npos, status.message.find("temperature.motor_c high"));
 
-  const auto axis_bits = find_value(status, "Axis error bits");
+  const auto axis_bits = find_value(status, "axis.error_bits");
   ASSERT_TRUE(axis_bits.has_value());
   EXPECT_EQ("0x0000000000000100", axis_bits.value());
 
-  const auto axis_flags = find_value(status, "Axis error flags");
+  const auto axis_flags = find_value(status, "axis.error_flags");
   ASSERT_TRUE(axis_flags.has_value());
   EXPECT_NE(std::string::npos, axis_flags.value().find("encoder_failed"));
 }
@@ -339,32 +339,15 @@ TEST(DiagnosticsTest, JointWarnsWhenTemperaturesAreElevated)
   helper.populate_joint_status(status, 0);
 
   EXPECT_EQ(diagnostic_msgs::msg::DiagnosticStatus::WARN, status.level);
-  EXPECT_NE(std::string::npos, status.message.find("FET temperature [C] elevated"));
+  EXPECT_NE(std::string::npos, status.message.find("temperature.fet_c elevated"));
 
-  const auto fet_value = find_value(status, "FET temperature [C]");
+  const auto fet_value = find_value(status, "temperature.fet_c");
   ASSERT_TRUE(fet_value.has_value());
   EXPECT_NE(std::string::npos, fet_value.value().find("71."));
 
-  const auto axis_bits = find_value(status, "Axis error bits");
+  const auto axis_bits = find_value(status, "axis.error_bits");
   ASSERT_TRUE(axis_bits.has_value());
   EXPECT_EQ("0x0", axis_bits.value());
-}
-
-TEST(DiagnosticsTest, DriveReportsDecodedOdriveError)
-{
-  DiagnosticsTestHelper helper;
-  auto & drive = helper.add_drive("drive_label");
-  drive.odrive_error = static_cast<double>(0x00000010ULL);
-
-  diagnostic_updater::DiagnosticStatusWrapper status;
-  helper.populate_drive_status(status, 0);
-
-  EXPECT_EQ(diagnostic_msgs::msg::DiagnosticStatus::ERROR, status.level);
-  EXPECT_NE(std::string::npos, status.message.find("dc_bus_over_current"));
-
-  const auto bits = find_value(status, "ODrive error bits");
-  ASSERT_TRUE(bits.has_value());
-  EXPECT_EQ("0x0000000000000010", bits.value());
 }
 
 TEST(DiagnosticsTest, SensorWarnsWhenVoltageUnavailable)
@@ -379,7 +362,7 @@ TEST(DiagnosticsTest, SensorWarnsWhenVoltageUnavailable)
   EXPECT_EQ(diagnostic_msgs::msg::DiagnosticStatus::WARN, status.level);
   EXPECT_EQ("Voltage unavailable", status.message);
 
-  const auto voltage_value = find_value(status, "Vbus voltage [V]");
+  const auto voltage_value = find_value(status, "vbus_voltage_v");
   ASSERT_TRUE(voltage_value.has_value());
   EXPECT_EQ("NaN", voltage_value.value());
 }
@@ -401,15 +384,15 @@ TEST(DiagnosticsTest, JointReportsNominalWhenNoFaults)
   EXPECT_EQ(diagnostic_msgs::msg::DiagnosticStatus::OK, status.level);
   EXPECT_EQ("Nominal", status.message);
 
-  const auto fet = find_value(status, "FET temperature [C]");
+  const auto fet = find_value(status, "temperature.fet_c");
   ASSERT_TRUE(fet.has_value());
   EXPECT_EQ("40", fet.value());
 
-  const auto motor = find_value(status, "Motor temperature [C]");
+  const auto motor = find_value(status, "temperature.motor_c");
   ASSERT_TRUE(motor.has_value());
   EXPECT_EQ("35", motor.value());
 
-  const auto axis_bits = find_value(status, "Axis error bits");
+  const auto axis_bits = find_value(status, "axis.error_bits");
   ASSERT_TRUE(axis_bits.has_value());
   EXPECT_EQ("0x0", axis_bits.value());
 }
