@@ -1,9 +1,9 @@
 <library path="odrive_hardware_interface">
-  <class name="odrive_hardware_interface/ODriveHardwareInterface"
+  <class name="odrive_hardware_interface/ODriveHardwareInterfaceBare"
          type="odrive_hardware_interface::ODriveHardwareInterface"
          base_class_type="hardware_interface::SystemInterface">
     <description>
-      ODrive plugin for ros2_control.
+      Bare ODrive plugin for ros2_control (no ROS diagnostics factory).
     </description>
   </class>
 </library>

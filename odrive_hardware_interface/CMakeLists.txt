@@ -53,7 +53,10 @@ ament_auto_add_library(
   ${PROJECT_NAME} SHARED
   src/odrive_hardware_interface.cpp
   src/odrive_configuration.cpp
+  src/odrive_hardware_interface_plugin.cpp
 )
+
+ament_target_dependencies(${PROJECT_NAME} pluginlib)
 
 target_link_libraries(
   ${PROJECT_NAME}
