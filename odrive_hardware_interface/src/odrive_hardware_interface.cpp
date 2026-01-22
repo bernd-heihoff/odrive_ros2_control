@@ -164,6 +164,7 @@ void ODriveHardwareInterface::reset_runtime_state()
 
   for (auto & sensor : sensors_) {
     sensor.vbus_voltage = std::numeric_limits<double>::quiet_NaN();
+    sensor.transport_error = 0.0;
   }
 
   for (auto & drive : drives_) {
@@ -555,6 +556,10 @@ std::vector<hardware_interface::StateInterface> ODriveHardwareInterface::export_
     state_interfaces.emplace_back(
       hardware_interface::StateInterface(
         info_.sensors[i].name, "vbus_voltage", &sensors_[i].vbus_voltage));
+
+    state_interfaces.emplace_back(
+      hardware_interface::StateInterface(
+        info_.sensors[i].name, "transport_error", &sensors_[i].transport_error));
   }
 
   for (size_t i = 0; i < info_.joints.size(); i++) {
@@ -945,6 +950,15 @@ void ODriveHardwareInterface::maybe_update_diagnostics()
 
 return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Duration &)
 {
+  const auto find_sensor_index = [&](std::int64_t serial) -> std::optional<std::size_t> {
+      for (std::size_t i = 0; i < sensors_.size(); ++i) {
+        if (sensors_[i].serial_number == serial) {
+          return i;
+        }
+      }
+      return std::nullopt;
+    };
+
   for (size_t i = 0; i < info_.sensors.size(); i++) {
     float vbus_voltage;
 
@@ -952,9 +966,11 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
       transport_->read(sensors_[i].serial_number, odrive::VBUS_VOLTAGE, vbus_voltage);
       status != 0)
     {
+      sensors_[i].transport_error = static_cast<double>(status);
       return to_io_return(status, "reading vbus voltage");
     }
     sensors_[i].vbus_voltage = vbus_voltage;
+    sensors_[i].transport_error = 0.0;
   }
 
   // Note: System-level ODrive error polling is intentionally disabled.
@@ -984,9 +1000,16 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
         failing_stage);
       status != 0)
     {
+      if (const auto sensor_index = find_sensor_index(joints_[i].serial_number)) {
+        sensors_[*sensor_index].transport_error = static_cast<double>(status);
+      }
       std::string action = failing_stage.empty() ? "reading axis telemetry" :
         "reading axis telemetry (" + failing_stage + ")";
       return to_io_return(status, action);
+    }
+
+    if (const auto sensor_index = find_sensor_index(joints_[i].serial_number)) {
+      sensors_[*sensor_index].transport_error = 0.0;
     }
 
     if (const auto axis_error_value = extract_error_value(joints_[i].axis_error)) {
