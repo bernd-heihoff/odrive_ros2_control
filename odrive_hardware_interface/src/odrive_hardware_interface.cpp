@@ -267,6 +267,15 @@ CallbackReturn ODriveHardwareInterface::initialize_transport()
     if (write_enable_status != 0) {
       return to_callback_return(write_enable_status, "enabling watchdog");
     }
+
+    if (joint_context.enable_watchdog) {
+      const int feed_status = transport_->call(
+        joint_context.serial_number,
+        axis_endpoint(odrive::AXIS__WATCHDOG_FEED, joint_context.axis));
+      if (feed_status != 0) {
+        return to_callback_return(feed_status, "feeding watchdog during initialization");
+      }
+    }
   }
 
   return CallbackReturn::SUCCESS;
@@ -1020,11 +1029,16 @@ return_type ODriveHardwareInterface::write(const rclcpp::Time & time, const rclc
   }
 
   for (size_t i = 0; i < info_.joints.size(); i++) {
+    const auto axis_error_value = extract_error_value(joints_[i].axis_error);
+    const auto motor_error_value = extract_error_value(joints_[i].motor_error);
+    const auto encoder_error_value = extract_error_value(joints_[i].encoder_error);
+    const auto controller_error_value = extract_error_value(joints_[i].controller_error);
+
     const bool has_fault = safety_config_.mask_faulted_axes &&
-      (extract_error_value(joints_[i].axis_error).has_value() ||
-      extract_error_value(joints_[i].motor_error).has_value() ||
-      extract_error_value(joints_[i].encoder_error).has_value() ||
-      extract_error_value(joints_[i].controller_error).has_value());
+      (axis_error_value.has_value() ||
+      motor_error_value.has_value() ||
+      encoder_error_value.has_value() ||
+      controller_error_value.has_value());
     AxisCommandState command_state{
       joints_[i].command_position,
       joints_[i].command_velocity,
@@ -1053,7 +1067,27 @@ return_type ODriveHardwareInterface::write(const rclcpp::Time & time, const rclc
     }
 
     if (has_fault) {
-      if (!axis_faulted_.empty()) {
+      const bool can_track_fault = (i < axis_faulted_.size());
+      const bool first_fault = can_track_fault && !axis_faulted_[i];
+
+      if (first_fault) {
+        RCUTILS_LOG_WARN_NAMED(
+          kLoggerName,
+          "Masking commands for joint '%s' due to fault(s): axis=0x%016llx (%s) motor=0x%016llx (%s) encoder=0x%016llx (%s) controller=0x%016llx (%s). Last commanded effort=%.3f (control_level=%d).",
+          info_.joints[i].name.c_str(),
+          axis_error_value ? static_cast<unsigned long long>(*axis_error_value) : 0ull,
+          axis_error_value ? describe_axis_error(*axis_error_value).c_str() : "",
+          motor_error_value ? static_cast<unsigned long long>(*motor_error_value) : 0ull,
+          motor_error_value ? describe_motor_error(*motor_error_value).c_str() : "",
+          encoder_error_value ? static_cast<unsigned long long>(*encoder_error_value) : 0ull,
+          encoder_error_value ? describe_encoder_error(*encoder_error_value).c_str() : "",
+          controller_error_value ? static_cast<unsigned long long>(*controller_error_value) : 0ull,
+          controller_error_value ? describe_controller_error(*controller_error_value).c_str() : "",
+          command_state.command_effort,
+          static_cast<int>(joints_[i].control_level));
+      }
+
+      if (can_track_fault) {
         axis_faulted_[i] = true;
       }
 
@@ -1075,6 +1109,10 @@ return_type ODriveHardwareInterface::write(const rclcpp::Time & time, const rclc
 
     if (i < axis_faulted_.size() && axis_faulted_[i]) {
       axis_faulted_[i] = false;
+      RCUTILS_LOG_INFO_NAMED(
+        kLoggerName,
+        "Fault cleared for joint '%s'; resuming command writes.",
+        info_.joints[i].name.c_str());
     }
     if (i < idle_requested_on_fault_.size() && idle_requested_on_fault_[i]) {
       idle_requested_on_fault_[i] = false;
