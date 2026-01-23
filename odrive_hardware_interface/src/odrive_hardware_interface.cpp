@@ -186,6 +186,7 @@ void ODriveHardwareInterface::reset_runtime_state()
     joint.read_error = 0.0;
     joint.write_error = 0.0;
     joint.telemetry_valid = 0.0;
+    joint.healthy = 0.0;
 
     joint.torque_constant = std::numeric_limits<float>::quiet_NaN();
     joint.control_level = AxisControlLevel::UNDEFINED;
@@ -599,6 +600,9 @@ std::vector<hardware_interface::StateInterface> ODriveHardwareInterface::export_
     state_interfaces.emplace_back(
       hardware_interface::StateInterface(
         info_.joints[i].name, "telemetry_valid", &joints_[i].telemetry_valid));
+    state_interfaces.emplace_back(
+      hardware_interface::StateInterface(
+        info_.joints[i].name, "healthy", &joints_[i].healthy));
   }
 
   return state_interfaces;
@@ -1023,6 +1027,11 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
       return std::nullopt;
     };
 
+  // Default-unhealthy each cycle; only flip to healthy after a complete successful read.
+  for (auto & joint : joints_) {
+    joint.healthy = 0.0;
+  }
+
   for (size_t i = 0; i < info_.sensors.size(); i++) {
     float vbus_voltage;
 
@@ -1074,6 +1083,14 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
         "reading axis telemetry (" + failing_stage + ")";
       return to_io_return(status, action);
     }
+
+    // Independent single-source-of-truth health flag: computed from the raw values just read.
+    const bool errors_clear =
+      std::isfinite(sample.axis_error) && sample.axis_error == 0.0 &&
+      std::isfinite(sample.motor_error) && sample.motor_error == 0.0 &&
+      std::isfinite(sample.encoder_error) && sample.encoder_error == 0.0 &&
+      std::isfinite(sample.controller_error) && sample.controller_error == 0.0;
+    joints_[i].healthy = errors_clear ? 1.0 : 0.0;
 
     joints_[i].effort = sample.effort;
     joints_[i].velocity = sample.velocity;

@@ -24,6 +24,7 @@ This repository is maintained for the Wackerbot platform and regularly rebased o
 - Native USB transport with watchdog integration and recovery support.
 - Position, velocity, and torque command modes with seamless mode switching.
 - Comprehensive state feedback (position, velocity, effort, temperatures, and axis/motor/encoder/controller error bitmasks).
+- A controller-friendly per-axis health flag (`<joint>/healthy`) computed directly from the latest hardware reads.
 - Parameter-driven configuration for multiple ODrives and axes within one hardware instance.
 - Command-limit validation to guard against NAN / out-of-range set points before they reach the drive.
 - Example URDF and launch files that plug directly into `ros2_control` demo controllers.
@@ -120,6 +121,15 @@ Add a `<sensor>` entry per unique ODrive you monitor for bus voltage. When multi
 - Axis / motor / encoder / controller error transitions are logged via `rclcpp::Logger` warnings with decoded bit masks. Use the new unit tests (see below) as a reference for expected log messages.
 - The hardware interface resets telemetry to `NaN` when transport communication drops, making it easy to detect stale data in controllers.
 - `recover()` can be called through lifecycle transitions to reinitialize the transport, clear errors, and resume operation without restarting the process.
+
+### Axis health state
+
+The `odrive_hardware_interface` exposes a per-joint state interface named `healthy` (full key: `<joint>/healthy`).
+
+- `1.0` means the latest axis telemetry read succeeded and the axis error registers (axis/motor/encoder/controller) were all zero.
+- `0.0` means *unhealthy*, including any non-zero error register or any telemetry read failure.
+
+This value is deliberately computed directly from the most recent hardware reads (not derived from other state interfaces) and is reset to `0.0` at the beginning of each `read()` cycle, so it cannot remain stale/latched across failed reads.
 
 ## Testing
 

@@ -183,6 +183,9 @@ private:
     // 1.0 means the latest telemetry sample is complete; 0.0 otherwise.
     double telemetry_valid{0.0};
 
+    // 1.0 means axis telemetry read succeeded and all axis error registers were 0; 0.0 otherwise.
+    double healthy{0.0};
+
     AxisControlLevel control_level{AxisControlLevel::UNDEFINED};
     JointConfig::CommandLimits command_limits;
     std::uint64_t last_axis_error{0};
