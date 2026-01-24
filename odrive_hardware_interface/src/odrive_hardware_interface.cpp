@@ -472,11 +472,21 @@ CallbackReturn ODriveHardwareInterface::configure_from_info(
   axis_faulted_.assign(joints_.size(), false);
   idle_requested_on_fault_.assign(joints_.size(), false);
 
-  return initialize_transport();
+  return CallbackReturn::SUCCESS;
 }
 
 CallbackReturn ODriveHardwareInterface::on_activate(const rclcpp_lifecycle::State &)
 {
+  // Attempt hardware connection - if this fails, hardware stays INACTIVE and node continues
+  const auto init_result = initialize_transport();
+  if (init_result != CallbackReturn::SUCCESS) {
+    RCUTILS_LOG_ERROR_NAMED(
+      kLoggerName,
+      "Failed to initialize ODrive transport during activation. "
+      "Hardware will remain INACTIVE. Check USB connections and try activating again.");
+    return init_result;
+  }
+
   if (safety_config_.gate_outputs_with_lifecycle) {
     outputs_enabled_ = true;
   }
@@ -1018,6 +1028,23 @@ void ODriveHardwareInterface::maybe_update_diagnostics()
 
 return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Duration &)
 {
+  // If transport lost (disconnected during operation), set all joints unhealthy and return.
+  // Recovery requires deactivate+activate cycle.
+  if (!transport_) {
+    for (auto & joint : joints_) {
+      joint.healthy = 0.0;
+      joint.telemetry_valid = 0.0;
+    }
+    for (auto & sensor : sensors_) {
+      sensor.vbus_voltage = std::numeric_limits<double>::quiet_NaN();
+    }
+    RCUTILS_LOG_WARN_THROTTLE(
+      RCUTILS_STEADY_TIME, 5000, kLoggerName,
+      "Transport unavailable during read(). All joints marked unhealthy. "
+      "Deactivate and reactivate hardware to reconnect.");
+    return return_type::OK;
+  }
+
   const auto find_sensor_index = [&](std::int64_t serial) -> std::optional<std::size_t> {
       for (std::size_t i = 0; i < sensors_.size(); ++i) {
         if (sensors_[i].serial_number == serial) {
@@ -1153,6 +1180,16 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
 return_type ODriveHardwareInterface::write(const rclcpp::Time & time, const rclcpp::Duration &)
 {
   (void)time;
+
+  // If transport lost, skip all writes. Joints are already marked unhealthy in read().
+  if (!transport_) {
+    RCUTILS_LOG_WARN_THROTTLE(
+      RCUTILS_STEADY_TIME, 5000, kLoggerName,
+      "Transport unavailable during write(). Skipping all command writes. "
+      "Deactivate and reactivate hardware to reconnect.");
+    return return_type::OK;
+  }
+
   const bool lifecycle_ok = !safety_config_.gate_outputs_with_lifecycle || outputs_enabled_;
   if (!lifecycle_ok) {
     return return_type::OK;
