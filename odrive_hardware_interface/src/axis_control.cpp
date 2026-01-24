@@ -14,8 +14,26 @@
 
 #include "odrive_hardware_interface/axis_control.hpp"
 
+#include <algorithm>
+#include <limits>
+
 namespace odrive_hardware_interface
 {
+// Type safety checks for ODrive protocol compatibility
+static_assert(sizeof(float) == 4, "Float must be 32-bit for ODrive protocol");
+static_assert(sizeof(std::int32_t) == 4, "int32_t size assumption for ODrive protocol");
+static_assert(std::numeric_limits<double>::is_iec559, "IEEE 754 floating point required");
+
+namespace
+{
+/// Saturate double to valid float range to prevent overflow during conversion.
+constexpr float saturate_to_float(double value)
+{
+  constexpr double max_val = static_cast<double>(std::numeric_limits<float>::max());
+  constexpr double min_val = static_cast<double>(std::numeric_limits<float>::lowest());
+  return static_cast<float>(std::clamp(value, min_val, max_val));
+}
+}  // namespace
 
 int perform_axis_mode_switch(
   ODriveTransport & transport,
@@ -67,7 +85,7 @@ int perform_axis_mode_switch(
         if (const int status = write_axis_value(
             "priming torque setpoint",
             odrive::AXIS__CONTROLLER__INPUT_TORQUE,
-            static_cast<float>(command_state.command_effort));
+            saturate_to_float(command_state.command_effort));
           status != 0)
         {
           return status;
@@ -101,7 +119,7 @@ int perform_axis_mode_switch(
         if (const int status = write_axis_value(
             "priming velocity setpoint",
             odrive::AXIS__CONTROLLER__INPUT_VEL,
-            static_cast<float>(radians_to_turns(command_state.command_velocity)));
+            saturate_to_float(radians_to_turns(command_state.command_velocity)));
           status != 0)
         {
           return status;
@@ -110,7 +128,7 @@ int perform_axis_mode_switch(
         if (const int status = write_axis_value(
             "priming torque feed-forward",
             odrive::AXIS__CONTROLLER__INPUT_TORQUE,
-            static_cast<float>(command_state.command_effort));
+            saturate_to_float(command_state.command_effort));
           status != 0)
         {
           return status;
@@ -145,7 +163,7 @@ int perform_axis_mode_switch(
         if (const int status = write_axis_value(
             "priming position setpoint",
             odrive::AXIS__CONTROLLER__INPUT_POS,
-            static_cast<float>(radians_to_turns(command_state.command_position)));
+            saturate_to_float(radians_to_turns(command_state.command_position)));
           status != 0)
         {
           return status;
@@ -154,7 +172,7 @@ int perform_axis_mode_switch(
         if (const int status = write_axis_value(
             "priming velocity limit",
             odrive::AXIS__CONTROLLER__INPUT_VEL,
-            static_cast<float>(radians_to_turns(command_state.command_velocity)));
+            saturate_to_float(radians_to_turns(command_state.command_velocity)));
           status != 0)
         {
           return status;
@@ -163,7 +181,7 @@ int perform_axis_mode_switch(
         if (const int status = write_axis_value(
             "priming torque limit",
             odrive::AXIS__CONTROLLER__INPUT_TORQUE,
-            static_cast<float>(command_state.command_effort));
+            saturate_to_float(command_state.command_effort));
           status != 0)
         {
           return status;
@@ -224,7 +242,7 @@ int write_axis_command(
         if (const int status = write_axis_value(
             "writing position command",
             odrive::AXIS__CONTROLLER__INPUT_POS,
-            static_cast<float>(radians_to_turns(command_state.command_position)));
+            saturate_to_float(radians_to_turns(command_state.command_position)));
           status != 0)
         {
           return status;
@@ -233,7 +251,7 @@ int write_axis_command(
         if (const int status = write_axis_value(
             "writing velocity command",
             odrive::AXIS__CONTROLLER__INPUT_VEL,
-            static_cast<float>(radians_to_turns(command_state.command_velocity)));
+            saturate_to_float(radians_to_turns(command_state.command_velocity)));
           status != 0)
         {
           return status;
@@ -242,7 +260,7 @@ int write_axis_command(
         if (const int status = write_axis_value(
             "writing torque command",
             odrive::AXIS__CONTROLLER__INPUT_TORQUE,
-            static_cast<float>(command_state.command_effort));
+            saturate_to_float(command_state.command_effort));
           status != 0)
         {
           return status;
@@ -263,7 +281,7 @@ int write_axis_command(
         if (const int status = write_axis_value(
             "writing velocity command",
             odrive::AXIS__CONTROLLER__INPUT_VEL,
-            static_cast<float>(radians_to_turns(command_state.command_velocity)));
+            saturate_to_float(radians_to_turns(command_state.command_velocity)));
           status != 0)
         {
           return status;
@@ -272,7 +290,7 @@ int write_axis_command(
         if (const int status = write_axis_value(
             "writing torque command",
             odrive::AXIS__CONTROLLER__INPUT_TORQUE,
-            static_cast<float>(command_state.command_effort));
+            saturate_to_float(command_state.command_effort));
           status != 0)
         {
           return status;
@@ -293,7 +311,7 @@ int write_axis_command(
         const int status = write_axis_value(
           "writing torque command",
           odrive::AXIS__CONTROLLER__INPUT_TORQUE,
-          static_cast<float>(command_state.command_effort));
+          saturate_to_float(command_state.command_effort));
         if (status != 0) {
           return status;
         }

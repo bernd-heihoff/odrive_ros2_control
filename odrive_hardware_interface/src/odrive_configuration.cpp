@@ -195,6 +195,18 @@ bool parse_hardware_configuration(
       return false;
     }
 
+    // Validate watchdog timeout if enabled
+    if (joint_config.enable_watchdog) {
+      if (joint_config.watchdog_timeout <= 0.0) {
+        error_message = "Joint '" + joint.name + "' watchdog_timeout must be positive";
+        return false;
+      }
+      if (joint_config.watchdog_timeout < 0.01) {
+        error_message = "Joint '" + joint.name + "' watchdog_timeout too short (< 10ms)";
+        return false;
+      }
+    }
+
     joint_config.command_limits.enforce = true;
     const auto enforce_limits_it = joint.parameters.find("enforce_command_limits");
     if (enforce_limits_it != joint.parameters.end()) {
