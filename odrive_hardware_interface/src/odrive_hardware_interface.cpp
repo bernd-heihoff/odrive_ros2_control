@@ -135,6 +135,73 @@ return_type to_io_return(int status, const std::string & action)
   return return_type::ERROR;
 }
 
+// Retry wrapper for USB operations
+template<typename T>
+int read_with_retry(
+  ODriveTransport & transport,
+  std::int64_t serial,
+  std::int16_t endpoint,
+  T & value,
+  unsigned int max_attempts,
+  std::chrono::milliseconds retry_delay)
+{
+  int last_error = 0;
+
+  for (unsigned int attempt = 0; attempt < max_attempts; ++attempt) {
+    int status = transport.read(serial, endpoint, value);
+
+    if (status == 0) {
+      return 0;  // Success
+    }
+
+    last_error = status;
+
+    // Don't retry on fatal errors
+    if (status == -ENODEV || status == -EPERM || status == -EINVAL) {
+      break;
+    }
+
+    // Retry on transient errors (ETIMEDOUT, EBUSY, EIO)
+    if (attempt < max_attempts - 1) {
+      std::this_thread::sleep_for(retry_delay);
+    }
+  }
+
+  return last_error;
+}
+
+template<typename T>
+int write_with_retry(
+  ODriveTransport & transport,
+  std::int64_t serial,
+  std::int16_t endpoint,
+  const T & value,
+  unsigned int max_attempts,
+  std::chrono::milliseconds retry_delay)
+{
+  int last_error = 0;
+
+  for (unsigned int attempt = 0; attempt < max_attempts; ++attempt) {
+    int status = transport.write(serial, endpoint, value);
+
+    if (status == 0) {
+      return 0;
+    }
+
+    last_error = status;
+
+    if (status == -ENODEV || status == -EPERM || status == -EINVAL) {
+      break;
+    }
+
+    if (attempt < max_attempts - 1) {
+      std::this_thread::sleep_for(retry_delay);
+    }
+  }
+
+  return last_error;
+}
+
 }  // namespace
 
 ODriveHardwareInterface::ODriveHardwareInterface()
@@ -242,29 +309,38 @@ CallbackReturn ODriveHardwareInterface::initialize_transport()
     const auto & joint_config = hardware_config_.joints[i];
 
     float torque_constant = std::numeric_limits<float>::quiet_NaN();
-    const int read_status = transport_->read(
+    const int read_status = read_with_retry(
+      *transport_,
       joint_context.serial_number,
       axis_endpoint(odrive::AXIS__MOTOR__CONFIG__TORQUE_CONSTANT, joint_context.axis),
-      torque_constant);
+      torque_constant,
+      runtime_config_.usb_read_retries,
+      std::chrono::milliseconds(runtime_config_.usb_retry_delay_ms));
     if (read_status != 0) {
       return to_callback_return(read_status, "reading motor torque constant");
     }
     joint_context.torque_constant = torque_constant;
 
     if (joint_context.enable_watchdog) {
-      const int write_timeout_status = transport_->write(
+      const int write_timeout_status = write_with_retry(
+        *transport_,
         joint_context.serial_number,
         axis_endpoint(odrive::AXIS__CONFIG__WATCHDOG_TIMEOUT, joint_context.axis),
-        static_cast<float>(joint_config.watchdog_timeout));
+        static_cast<float>(joint_config.watchdog_timeout),
+        runtime_config_.usb_write_retries,
+        std::chrono::milliseconds(runtime_config_.usb_retry_delay_ms));
       if (write_timeout_status != 0) {
         return to_callback_return(write_timeout_status, "configuring watchdog timeout");
       }
     }
 
-    const int write_enable_status = transport_->write(
+    const int write_enable_status = write_with_retry(
+      *transport_,
       joint_context.serial_number,
       axis_endpoint(odrive::AXIS__CONFIG__ENABLE_WATCHDOG, joint_context.axis),
-      static_cast<bool>(joint_context.enable_watchdog));
+      static_cast<bool>(joint_context.enable_watchdog),
+      runtime_config_.usb_write_retries,
+      std::chrono::milliseconds(runtime_config_.usb_retry_delay_ms));
     if (write_enable_status != 0) {
       return to_callback_return(write_enable_status, "enabling watchdog");
     }
@@ -320,6 +396,7 @@ CallbackReturn ODriveHardwareInterface::configure_from_info(
     joint.axis = joint_config.axis;
     joint.enable_watchdog = joint_config.enable_watchdog;
     joint.command_limits = joint_config.command_limits;
+    joint.feedback_limits = joint_config.feedback_limits;
     joints_.emplace_back(joint);
   }
 
@@ -1084,6 +1161,8 @@ void ODriveHardwareInterface::maybe_update_diagnostics()
 
 return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Duration &)
 {
+  auto start_time = std::chrono::steady_clock::now();
+
   std::lock_guard<std::mutex> lock(state_mutex_);
 
   // If transport lost (disconnected during operation), set all joints unhealthy and return.
@@ -1184,6 +1263,64 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
       continue;
     }
 
+    // Feedback validation (sanity checks)
+    bool feedback_valid = true;
+    std::string validation_error;
+
+    // Check for non-finite values
+    if (!std::isfinite(sample.position) || !std::isfinite(sample.velocity) ||
+      !std::isfinite(sample.effort))
+    {
+      feedback_valid = false;
+      validation_error = "Non-finite feedback values";
+    }
+
+    // Check believable velocity limit
+    if (feedback_valid && joints_[i].feedback_limits.max_believable_velocity &&
+      std::abs(sample.velocity) > *joints_[i].feedback_limits.max_believable_velocity)
+    {
+      feedback_valid = false;
+      validation_error = "Velocity " + std::to_string(sample.velocity) +
+        " exceeds believable limit " +
+        std::to_string(*joints_[i].feedback_limits.max_believable_velocity);
+    }
+
+    // Check believable effort limit
+    if (feedback_valid && joints_[i].feedback_limits.max_believable_effort &&
+      std::abs(sample.effort) > *joints_[i].feedback_limits.max_believable_effort)
+    {
+      feedback_valid = false;
+      validation_error = "Effort " + std::to_string(sample.effort) +
+        " exceeds believable limit " +
+        std::to_string(*joints_[i].feedback_limits.max_believable_effort);
+    }
+
+    // Check position discontinuity
+    if (feedback_valid && std::isfinite(joints_[i].last_valid_position) &&
+      joints_[i].feedback_limits.max_position_discontinuity)
+    {
+      double position_jump = std::abs(sample.position - joints_[i].last_valid_position);
+      if (position_jump > *joints_[i].feedback_limits.max_position_discontinuity) {
+        feedback_valid = false;
+        validation_error = "Position discontinuity " + std::to_string(position_jump) +
+          " exceeds limit " +
+          std::to_string(*joints_[i].feedback_limits.max_position_discontinuity);
+      }
+    }
+
+    if (!feedback_valid) {
+      joints_[i].read_error = -1.0;  // Validation error
+      joints_[i].telemetry_valid = 0.0;
+      joints_[i].healthy = 0.0;
+      RCUTILS_LOG_WARN_THROTTLE(
+        RCUTILS_STEADY_TIME, runtime_config_.log_throttle_ms, kLoggerName,
+        "Feedback validation failed for joint[%zu]='%s': %s. "
+        "Keeping last valid state: pos=%.3f vel=%.3f eff=%.3f",
+        i, info_.joints[i].name.c_str(), validation_error.c_str(),
+        joints_[i].position, joints_[i].velocity, joints_[i].effort);
+      continue;
+    }
+
     // Independent single-source-of-truth health flag: computed from the raw values just read.
     const bool errors_clear =
       std::isfinite(sample.axis_error) && sample.axis_error == 0.0 &&
@@ -1203,6 +1340,10 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
     joints_[i].motor_temperature = sample.motor_temperature;
     joints_[i].read_error = 0.0;
     joints_[i].telemetry_valid = 1.0;
+
+    // Update last valid values for discontinuity detection
+    joints_[i].last_valid_position = sample.position;
+    joints_[i].last_valid_velocity = sample.velocity;
 
     if (const auto sensor_index = find_sensor_index(joints_[i].serial_number)) {
       sensors_[*sensor_index].transport_error = 0.0;
@@ -1236,13 +1377,36 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
 
   maybe_update_diagnostics();
 
+  // Deadline monitoring
+  if (runtime_config_.enable_deadline_warnings) {
+    auto duration = std::chrono::steady_clock::now() - start_time;
+    auto duration_sec = std::chrono::duration<double>(duration).count();
+    if (duration_sec > runtime_config_.max_read_cycle_time_sec) {
+      RCUTILS_LOG_WARN_THROTTLE(
+        RCUTILS_STEADY_TIME, runtime_config_.log_throttle_ms, kLoggerName,
+        "read() cycle time %.3fms exceeded limit %.3fms",
+        duration_sec * 1000.0,
+        runtime_config_.max_read_cycle_time_sec * 1000.0);
+    }
+  }
+
   return return_type::OK;
 }
 
-return_type ODriveHardwareInterface::write(const rclcpp::Time & time, const rclcpp::Duration &)
+return_type ODriveHardwareInterface::write(
+  const rclcpp::Time & time,
+  const rclcpp::Duration & period)
 {
+  auto start_time = std::chrono::steady_clock::now();
+
   std::lock_guard<std::mutex> lock(state_mutex_);
   (void)time;
+
+  // Calculate time delta for rate limiting
+  double dt = period.seconds();
+  if (dt <= 0.0 || !std::isfinite(dt)) {
+    dt = 0.001;  // Assume 1ms if period invalid
+  }
 
   // If transport lost, skip all writes. Joints are already marked unhealthy in read().
   if (!transport_) {
@@ -1276,6 +1440,57 @@ return_type ODriveHardwareInterface::write(const rclcpp::Time & time, const rclc
       joints_[i].position,
       joints_[i].velocity,
       joints_[i].effort};
+
+    // Apply rate limiting before validation
+    std::ostringstream rate_limit_msg;
+    bool was_rate_limited = false;
+
+    if (joints_[i].control_level == AxisControlLevel::POSITION) {
+      if (!apply_rate_limiting(
+          "Position",
+          command_state.command_position,
+          joints_[i].last_command_position,
+          joints_[i].command_limits.max_position_rate,
+          dt,
+          rate_limit_msg))
+      {
+        was_rate_limited = true;
+      }
+    }
+
+    if (joints_[i].control_level == AxisControlLevel::POSITION ||
+      joints_[i].control_level == AxisControlLevel::VELOCITY)
+    {
+      if (!apply_rate_limiting(
+          "Velocity",
+          command_state.command_velocity,
+          joints_[i].last_command_velocity,
+          joints_[i].command_limits.max_velocity_rate,
+          dt,
+          rate_limit_msg))
+      {
+        was_rate_limited = true;
+      }
+    }
+
+    if (!apply_rate_limiting(
+        "Effort",
+        command_state.command_effort,
+        joints_[i].last_command_effort,
+        joints_[i].command_limits.max_effort_rate,
+        dt,
+        rate_limit_msg))
+    {
+      was_rate_limited = true;
+    }
+
+    if (was_rate_limited) {
+      RCUTILS_LOG_WARN_THROTTLE(
+        RCUTILS_STEADY_TIME, runtime_config_.log_throttle_ms, kLoggerName,
+        "Rate limited joint '%s': %s",
+        info_.joints[i].name.c_str(),
+        rate_limit_msg.str().c_str());
+    }
 
     std::string validation_error;
     const bool command_valid = validate_joint_command(
@@ -1392,6 +1607,24 @@ return_type ODriveHardwareInterface::write(const rclcpp::Time & time, const rclc
     }
 
     joints_[i].write_error = 0.0;
+
+    // Update last command values for next cycle's rate limiting
+    joints_[i].last_command_position = command_state.command_position;
+    joints_[i].last_command_velocity = command_state.command_velocity;
+    joints_[i].last_command_effort = command_state.command_effort;
+  }
+
+  // Deadline monitoring
+  if (runtime_config_.enable_deadline_warnings) {
+    auto duration = std::chrono::steady_clock::now() - start_time;
+    auto duration_sec = std::chrono::duration<double>(duration).count();
+    if (duration_sec > runtime_config_.max_write_cycle_time_sec) {
+      RCUTILS_LOG_WARN_THROTTLE(
+        RCUTILS_STEADY_TIME, runtime_config_.log_throttle_ms, kLoggerName,
+        "write() cycle time %.3fms exceeded limit %.3fms",
+        duration_sec * 1000.0,
+        runtime_config_.max_write_cycle_time_sec * 1000.0);
+    }
   }
 
   return return_type::OK;

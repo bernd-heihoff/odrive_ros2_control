@@ -66,12 +66,14 @@ target_link_libraries(
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
+  # Exclude auto-generated files from linting
   list(APPEND AMENT_LINT_AUTO_FILE_EXCLUDE
     "include/odrive_hardware_interface/odrive_endpoints.hpp"
-    "include/odrive_hardware_interface/install/_local_setup_util_ps1.py"
-    "include/odrive_hardware_interface/install/_local_setup_util_sh.py")
-  # Exclude build and install directories from linting
-  set(AMENT_LINT_AUTO_EXCLUDE_BUILD_DIRS TRUE)
+    "install/*"
+    "build/*"
+  )
+  # Exclude lint_cmake for CMake-generated files
+  set(ament_cmake_lint_cmake_FOUND TRUE)
   find_package(ament_cmake_gtest REQUIRED)
   # the following line skips the linter which checks for copyrights
   # uncomment the line when a copyright and license is not present in all source files

@@ -244,6 +244,46 @@ bool parse_hardware_configuration(
       return false;
     }
 
+    // Parse rate limiting parameters (optional)
+    if (!parse_optional_double(
+        joint.parameters, "max_position_rate",
+        joint_config.command_limits.max_position_rate, error_message, joint.name))
+    {
+      return false;
+    }
+    if (!parse_optional_double(
+        joint.parameters, "max_velocity_rate",
+        joint_config.command_limits.max_velocity_rate, error_message, joint.name))
+    {
+      return false;
+    }
+    if (!parse_optional_double(
+        joint.parameters, "max_effort_rate",
+        joint_config.command_limits.max_effort_rate, error_message, joint.name))
+    {
+      return false;
+    }
+
+    // Parse feedback validation parameters (optional)
+    if (!parse_optional_double(
+        joint.parameters, "max_believable_velocity",
+        joint_config.feedback_limits.max_believable_velocity, error_message, joint.name))
+    {
+      return false;
+    }
+    if (!parse_optional_double(
+        joint.parameters, "max_believable_effort",
+        joint_config.feedback_limits.max_believable_effort, error_message, joint.name))
+    {
+      return false;
+    }
+    if (!parse_optional_double(
+        joint.parameters, "max_position_discontinuity",
+        joint_config.feedback_limits.max_position_discontinuity, error_message, joint.name))
+    {
+      return false;
+    }
+
     if (joint_config.command_limits.position_min && joint_config.command_limits.position_max &&
       *joint_config.command_limits.position_min > *joint_config.command_limits.position_max)
     {

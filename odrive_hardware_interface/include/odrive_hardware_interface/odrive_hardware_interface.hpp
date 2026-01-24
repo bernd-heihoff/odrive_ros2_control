@@ -126,6 +126,14 @@ private:
     unsigned int usb_timeout_ms{100};
     // Throttle interval for repeated log messages in milliseconds
     unsigned int log_throttle_ms{2000};
+    // Retry logic for transient USB errors
+    unsigned int usb_read_retries{3};
+    unsigned int usb_write_retries{3};
+    unsigned int usb_retry_delay_ms{5};
+    // Deadline monitoring
+    double max_read_cycle_time_sec{0.010};   // 10ms
+    double max_write_cycle_time_sec{0.010};  // 10ms
+    bool enable_deadline_warnings{true};
   };
 
   CallbackReturn initialize_transport();
@@ -168,7 +176,16 @@ private:
     std::int64_t serial_number{0};
     int axis{0};
     float torque_constant{std::numeric_limits<float>::quiet_NaN()};
-    
+
+    // Previous command values for rate limiting
+    double last_command_position{std::numeric_limits<double>::quiet_NaN()};
+    double last_command_velocity{std::numeric_limits<double>::quiet_NaN()};
+    double last_command_effort{std::numeric_limits<double>::quiet_NaN()};
+
+    // Previous feedback values for discontinuity detection
+    double last_valid_position{std::numeric_limits<double>::quiet_NaN()};
+    double last_valid_velocity{std::numeric_limits<double>::quiet_NaN()};
+
     // WATCHDOG SAFETY DESIGN:
     // Watchdog feeds occur ONLY during write() when commands are actively sent.
     // This is intentional: the watchdog should detect control loop failures,
@@ -209,6 +226,8 @@ private:
     std::uint64_t last_motor_error{0};
     std::uint64_t last_encoder_error{0};
     std::uint64_t last_controller_error{0};
+
+    JointConfig::FeedbackLimits feedback_limits;
   };
 
   TransportFactory transport_factory_;

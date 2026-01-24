@@ -11,12 +11,12 @@
 
 
 namespace odrive {
-    
+
 static constexpr const uint16_t json_crc = 0x9b40;
 
 static constexpr const uint16_t per_axis_offset = 229;
 
-enum { 
+enum {
     VBUS_VOLTAGE = 1,
     IBUS = 2,
     IBUS_REPORT_FILTER_K = 3,

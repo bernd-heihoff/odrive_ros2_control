@@ -42,7 +42,19 @@ struct JointConfig
     std::optional<double> velocity_max;
     std::optional<double> effort_min;
     std::optional<double> effort_max;
+    // Rate limiting (max change per second)
+    std::optional<double> max_position_rate;  // rad/s
+    std::optional<double> max_velocity_rate;  // rad/s²
+    std::optional<double> max_effort_rate;    // Nm/s
   } command_limits;
+
+  // Feedback validation limits (sanity checks)
+  struct FeedbackLimits
+  {
+    std::optional<double> max_believable_velocity;     // rad/s
+    std::optional<double> max_believable_effort;       // Nm
+    std::optional<double> max_position_discontinuity;  // rad
+  } feedback_limits;
 };
 
 struct HardwareConfiguration

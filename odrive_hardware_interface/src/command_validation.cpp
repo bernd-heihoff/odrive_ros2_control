@@ -48,6 +48,33 @@ bool validate_component(
 }
 }  // namespace
 
+bool apply_rate_limiting(
+  const char * label,
+  double & command,
+  double last_command,
+  const std::optional<double> & max_rate,
+  double dt,
+  std::ostringstream & message)
+{
+  if (!max_rate || !std::isfinite(last_command) || dt <= 0.0) {
+    return true;  // No rate limiting
+  }
+
+  double delta = command - last_command;
+  double max_delta = (*max_rate) * dt;
+
+  if (std::abs(delta) > max_delta) {
+    double limited_value = last_command + std::copysign(max_delta, delta);
+    message << label << " rate limited from " << command
+            << " to " << limited_value
+            << " (max_rate=" << *max_rate << " dt=" << dt << ")";
+    command = limited_value;
+    return false;  // Was rate limited
+  }
+
+  return true;
+}
+
 bool validate_joint_command(
   const JointConfig::CommandLimits & limits,
   AxisControlLevel level,

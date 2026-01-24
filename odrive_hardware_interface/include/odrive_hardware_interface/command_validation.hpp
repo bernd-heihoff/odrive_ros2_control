@@ -14,6 +14,7 @@
 
 #pragma once
 
+#include <sstream>
 #include <string>
 
 #include "odrive_hardware_interface/axis_control.hpp"
@@ -21,6 +22,15 @@
 
 namespace odrive_hardware_interface
 {
+/// Apply rate limiting to a command value. Returns false if limiting was applied.
+bool apply_rate_limiting(
+  const char * label,
+  double & command,
+  double last_command,
+  const std::optional<double> & max_rate,
+  double dt,
+  std::ostringstream & message);
+
 /// Validate the current joint command against configured limits and active control level.
 /// \returns true when the command is acceptable. On failure, \p reason contains a description.
 bool validate_joint_command(
