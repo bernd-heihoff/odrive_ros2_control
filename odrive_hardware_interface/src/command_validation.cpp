@@ -28,7 +28,6 @@ bool validate_component(
   double value,
   const std::optional<double> & min_limit,
   const std::optional<double> & max_limit,
-  bool enforce_limits,
   std::ostringstream & message)
 {
   if (!std::isfinite(value)) {
@@ -36,15 +35,13 @@ bool validate_component(
     return false;
   }
 
-  if (enforce_limits) {
-    if (min_limit && value < *min_limit) {
-      message << label << " command " << value << " is below minimum " << *min_limit;
-      return false;
-    }
-    if (max_limit && value > *max_limit) {
-      message << label << " command " << value << " exceeds maximum " << *max_limit;
-      return false;
-    }
+  if (min_limit && value < *min_limit) {
+    message << label << " command " << value << " is below minimum " << *min_limit;
+    return false;
+  }
+  if (max_limit && value > *max_limit) {
+    message << label << " command " << value << " exceeds maximum " << *max_limit;
+    return false;
   }
 
   return true;
@@ -65,7 +62,6 @@ bool validate_joint_command(
         command_state.command_position,
         limits.position_min,
         limits.position_max,
-        limits.enforce,
         message);
     };
 
@@ -75,7 +71,6 @@ bool validate_joint_command(
         command_state.command_velocity,
         limits.velocity_min,
         limits.velocity_max,
-        limits.enforce,
         message);
     };
 
@@ -85,7 +80,6 @@ bool validate_joint_command(
         command_state.command_effort,
         limits.effort_min,
         limits.effort_max,
-        limits.enforce,
         message);
     };
 

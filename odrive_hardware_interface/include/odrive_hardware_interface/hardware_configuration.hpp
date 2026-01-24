@@ -42,7 +42,6 @@ struct JointConfig
     std::optional<double> velocity_max;
     std::optional<double> effort_min;
     std::optional<double> effort_max;
-    bool enforce{false};
   } command_limits;
 };
 

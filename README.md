@@ -97,7 +97,6 @@ The hardware interface consumes the `ros2_control` hardware block defined in URD
 		<param name="watchdog_timeout">0.1</param>
 		<param name="command_position_min">-6.28</param>
 		<param name="command_position_max">6.28</param>
-		<param name="enforce_command_limits">true</param>
 	</joint>
 	<!-- repeat joint block for axis 1 -->
 </ros2_control>
@@ -111,8 +110,7 @@ Key parameters per joint:
 | `axis` | integer (0 or 1) | ✅ | Axis index on the selected ODrive. |
 | `enable_watchdog` | bool | ✅ | Enables drive watchdog feeding during command streaming; set to `false` for development rigs without watchdog. |
 | `watchdog_timeout` | seconds (double) | ✅ | Timeout programmed into the drive when `enable_watchdog` is true. |
-| `command_*_min/max` | double | optional | Optional safety limits for position (rad), velocity (rad/s), and effort (Nm); the interface rejects commands that violate enforced limits. |
-| `enforce_command_limits` | bool | optional | Defaults to `true`; set to `false` to log limit violations without blocking commands. |
+| `command_*_min/max` | double | optional | Optional safety limits for position (rad), velocity (rad/s), and effort (Nm); the interface rejects commands that violate these limits. |
 
 Add a `<sensor>` entry per unique ODrive you monitor for bus voltage. When multiple ODrives share the same serial, include one `<sensor>` and multiple `<joint>` entries pointing to the same serial with different axes.
 

@@ -77,7 +77,6 @@ TEST(ConfigurationTest, ParsesCommandLimitsWhenProvided)
   joint.parameters["command_velocity_max"] = "5.0";
   joint.parameters["command_effort_min"] = "-10.0";
   joint.parameters["command_effort_max"] = "10.0";
-  joint.parameters["enforce_command_limits"] = "true";
   info.joints.push_back(joint);
 
   HardwareConfiguration config;
@@ -86,7 +85,6 @@ TEST(ConfigurationTest, ParsesCommandLimitsWhenProvided)
 
   ASSERT_EQ(1u, config.joints.size());
   const auto & parsed_joint = config.joints.front();
-  EXPECT_TRUE(parsed_joint.command_limits.enforce);
   ASSERT_TRUE(parsed_joint.command_limits.position_min.has_value());
   EXPECT_DOUBLE_EQ(-1.5, parsed_joint.command_limits.position_min.value());
   ASSERT_TRUE(parsed_joint.command_limits.position_max.has_value());

@@ -207,15 +207,6 @@ bool parse_hardware_configuration(
       }
     }
 
-    joint_config.command_limits.enforce = true;
-    const auto enforce_limits_it = joint.parameters.find("enforce_command_limits");
-    if (enforce_limits_it != joint.parameters.end()) {
-      if (!parse_bool(enforce_limits_it->second, joint_config.command_limits.enforce)) {
-        error_message = "Joint '" + joint.name + "' has invalid 'enforce_command_limits' value";
-        return false;
-      }
-    }
-
     if (!parse_optional_double(
         joint.parameters, "command_position_min",
         joint_config.command_limits.position_min, error_message, joint.name))

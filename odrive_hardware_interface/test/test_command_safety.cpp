@@ -189,7 +189,6 @@ TEST_F(CommandSafetyTest, RejectsCommandsOutsideLimits)
   joint.parameters["watchdog_timeout"] = "0.10";
   joint.parameters["enable_watchdog"] = "false";
   joint.parameters["command_position_max"] = std::to_string(position_max);
-  joint.parameters["enforce_command_limits"] = "true";
   info.joints.push_back(joint);
 
   ASSERT_EQ(CallbackReturn::SUCCESS, interface.configure(info));
