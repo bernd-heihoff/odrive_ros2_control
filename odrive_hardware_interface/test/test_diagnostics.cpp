@@ -306,6 +306,50 @@ TEST(DiagnosticsConfigTest, InvalidParametersFallBackToDefaults)
   EXPECT_DOUBLE_EQ(95.0, helper.error_threshold());
 }
 
+TEST(DiagnosticsConfigTest, EnforceMinimumDiagnosticsPeriod)
+{
+  DiagnosticsConfigTestHelper helper;
+  MockTransport * transport = nullptr;
+  configure_default_transport_factory(helper, transport);
+
+  auto info = make_basic_hardware_info();
+  // Try to set period below minimum (100ms = 0.1s)
+  info.hardware_parameters["diagnostics_period"] = "0.05";
+
+  ASSERT_TRUE(helper.configure(info));
+  ASSERT_EQ(CallbackReturn::SUCCESS, helper.on_activate(rclcpp_lifecycle::State{}));
+  ASSERT_NE(nullptr, transport);
+  EXPECT_TRUE(transport->expectations_satisfied());
+
+  EXPECT_TRUE(helper.diagnostics_enabled());
+  EXPECT_TRUE(helper.has_diagnostics_node());
+  EXPECT_TRUE(helper.has_diagnostics_updater());
+  // Should be clamped to minimum 100ms
+  EXPECT_DOUBLE_EQ(0.1, helper.diagnostics_period_seconds());
+}
+
+TEST(DiagnosticsConfigTest, AcceptDiagnosticsPeriodAboveMinimum)
+{
+  DiagnosticsConfigTestHelper helper;
+  MockTransport * transport = nullptr;
+  configure_default_transport_factory(helper, transport);
+
+  auto info = make_basic_hardware_info();
+  // Set period above minimum (100ms)
+  info.hardware_parameters["diagnostics_period"] = "0.15";
+
+  ASSERT_TRUE(helper.configure(info));
+  ASSERT_EQ(CallbackReturn::SUCCESS, helper.on_activate(rclcpp_lifecycle::State{}));
+  ASSERT_NE(nullptr, transport);
+  EXPECT_TRUE(transport->expectations_satisfied());
+
+  EXPECT_TRUE(helper.diagnostics_enabled());
+  EXPECT_TRUE(helper.has_diagnostics_node());
+  EXPECT_TRUE(helper.has_diagnostics_updater());
+  // Should accept the value as-is
+  EXPECT_DOUBLE_EQ(0.15, helper.diagnostics_period_seconds());
+}
+
 std::optional<std::string> find_value(
   const diagnostic_updater::DiagnosticStatusWrapper & status,
   const std::string & key)

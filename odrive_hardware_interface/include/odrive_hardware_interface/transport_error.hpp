@@ -22,7 +22,8 @@ namespace odrive_hardware_interface
 
 /// Type-safe error codes for ODrive transport operations.
 /// Replaces raw errno codes with explicit, documented error types.
-enum class TransportError : int {
+enum class TransportError : int
+{
   /// Operation completed successfully
   OK = 0,
 

@@ -533,12 +533,16 @@ CallbackReturn ODriveHardwareInterface::configure_from_info(
     if (period_it != params.end()) {
       double parsed_period = diagnostics_config_.period_sec;
       if (try_parse_double(period_it->second, parsed_period) && parsed_period > 0.0) {
-        diagnostics_config_.period_sec = parsed_period;
-        if (parsed_period < 0.1) {
+        constexpr double MIN_DIAGNOSTICS_PERIOD_SEC = 0.1;  // 100ms minimum
+        if (parsed_period < MIN_DIAGNOSTICS_PERIOD_SEC) {
           RCUTILS_LOG_WARN_NAMED(
             kLoggerName,
-            "Diagnostics period %.3fs is < 100ms and may impact real-time performance",
-            parsed_period);
+            "Diagnostics period %.3fs is below minimum %.3fs; "
+            "clamping to minimum to protect real-time performance",
+            parsed_period, MIN_DIAGNOSTICS_PERIOD_SEC);
+          diagnostics_config_.period_sec = MIN_DIAGNOSTICS_PERIOD_SEC;
+        } else {
+          diagnostics_config_.period_sec = parsed_period;
         }
       } else {
         RCUTILS_LOG_WARN_NAMED(
@@ -1141,7 +1145,9 @@ void ODriveHardwareInterface::populate_drive_diagnostics(
   status.addf("stats.max_write_time_ms", "%.3f", cycle_stats_.max_write_cycle_time_sec * 1000.0);
   status.add("stats.usb_read_retries", static_cast<int>(cycle_stats_.usb_read_retries_total));
   status.add("stats.usb_write_retries", static_cast<int>(cycle_stats_.usb_write_retries_total));
-  status.add("stats.validation_failures", static_cast<int>(cycle_stats_.command_validation_failures));
+  status.add(
+    "stats.validation_failures",
+    static_cast<int>(cycle_stats_.command_validation_failures));
   status.add("stats.rate_limit_events", static_cast<int>(cycle_stats_.rate_limit_events));
 
   const auto summary_text = join_messages(messages);
