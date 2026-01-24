@@ -4,12 +4,82 @@
 
 This repository is maintained for the Wackerbot platform and regularly rebased on the upstream Factor Robotics implementation. The `wackerbot` branch targets ROS 2 Humble Hawksbill.
 
+## Documentation
+
+- **[Quick Reference](docs/quick-reference.md)** - Common commands and workflows at a glance
+- **[Safety Design](docs/safety-design.md)** - Comprehensive safety architecture and feature rationale
+- **[Troubleshooting Guide](docs/troubleshooting.md)** - Solutions to common problems
+- **[Error Reference](docs/error-reference.md)** - Complete error code lookup tables
+- **[Configuration Guide](docs/configuration-guide.md)** - Parameter tuning with practical examples
+
 ## Package summary
 
-- `odrive_hardware_interface` – the `hardware_interface::SystemInterface` plugin, configuration parser, command validation utilities, and transport adapters.
-- `odrive_demo_description` – xacro/URDF fragments that model an ODrive and pre-populate `ros2_control` parameters.
-- `odrive_demo_bringup` – launch files and controller configurations demonstrating common control modes.
-- `odrive_ros2_control` – meta-package that wires the above components together for discovery and installation.
+- **`odrive_hardware_interface`** – the `hardware_interface::SystemInterface` plugin, configuration parser, command validation utilities, and transport adapters.
+- **`odrive_demo_description`** – xacro/URDF fragments that model an ODrive and pre-populate `ros2_control` parameters.
+- **`odrive_demo_bringup`** – launch files and controller configurations demonstrating common control modes.
+- **`odrive_ros2_control`** – meta-package that wires the above components together for discovery and installation.
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ ROS 2 Control Layer                                         │
+│  ┌──────────────┐  ┌──────────────┐  ┌─────────────────┐    │
+│  │ diff_drive   │  │ joint_       │  │ forward_        │    │
+│  │ _controller  │  │ trajectory_  │  │ command_        │    │
+│  │              │  │ controller   │  │ controller      │    │
+│  └──────┬───────┘  └──────┬───────┘  └────────┬────────┘    │
+│         │                 │                   │             │
+│         └─────────────────┴───────────────────┘             │
+│                           │                                 │
+│                  ┌────────▼─────────┐                       │
+│                  │ Controller       │                       │
+│                  │ Manager          │                       │
+│                  └────────┬─────────┘                       │
+└───────────────────────────┼─────────────────────────────────┘
+                            │ Command/State Interfaces
+┌───────────────────────────┼─────────────────────────────────┐
+│ Hardware Interface        │                                 │
+│  ┌─────────────────────────▼──────────────────────────────┐ │
+│  │ ODriveHardwareInterface                                │ │
+│  │  ┌──────────────┐  ┌────────────────┐                  │ │
+│  │  │ Command      │  │ Safety Layer   │                  │ │
+│  │  │ Validation   │  │ • Watchdog     │                  │ │
+│  │  │ • Range check│  │ • Rate limit   │                  │ │
+│  │  │ • NaN detect │  │ • Fault mask   │                  │ │
+│  │  └──────┬───────┘  └───────┬────────┘                  │ │
+│  │         │                  │                           │ │
+│  │  ┌──────▼──────────────────▼────────┐                  │ │
+│  │  │ State Machine (Lifecycle)        │                  │ │
+│  │  │ UNCONFIGURED → INACTIVE → ACTIVE │                  │ │
+│  │  └──────────────┬───────────────────┘                  │ │
+│  │                 │                                      │ │
+│  │  ┌──────────────▼───────────────┐                      │ │
+│  │  │ Transport Layer              │                      │ │
+│  │  │ • USB protocol (libusb-1.0)  │                      │ │
+│  │  │ • Fixed timeout strategy     │                      │ │
+│  │  │ • Retry with backoff         │                      │ │
+│  │  └──────────────┬───────────────┘                      │ │
+│  └─────────────────┼──────────────────────────────────────┘ │
+└────────────────────┼────────────────────────────────────────┘
+                     │ USB (libusb)
+┌────────────────────┼────────────────────────────────────────┐
+│ ODrive Hardware    │                                        │
+│  ┌─────────────────▼────────┐  ┌─────────────────────┐      │
+│  │ Axis 0                   │  │ Axis 1              │      │
+│  │ • Encoder                │  │ • Encoder           │      │
+│  │ • Motor + DRV8301        │  │ • Motor + DRV8301   │      │
+│  │ • Controller (FOC)       │  │ • Controller (FOC)  │      │
+│  │ • Watchdog timer         │  │ • Watchdog timer    │      │
+│  └──────────────────────────┘  └─────────────────────┘      │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Key Design Principles:**
+- **Defense in Depth**: Multiple safety layers (validation → rate limiting → watchdog → lifecycle gating)
+- **Fail-Fast**: Fixed timeouts surface problems immediately rather than masking them
+- **Fault Isolation**: `mask_faulted_axes` prevents error cascades across independent joints
+- **Observable State**: Rich diagnostics and health flags for runtime monitoring
 
 ## Compatibility
 
@@ -169,9 +239,16 @@ Source your ROS installation (e.g. `source /opt/ros/humble/setup.bash`) before r
 
 ## Further reading
 
-- [Project wiki](https://github.com/Factor-Robotics/odrive_ros2_control/wiki/Documentation) – upstream documentation, firmware notes, and calibration tips.
-- [ros2_control documentation](https://control.ros.org/) – controller manager usage, interface concepts, and best practices.
-- [`odrive_demo_description` URDF](odrive_demo_description/urdf/odrive.ros2_control.xacro) – ready-to-use macro for your robot description.
+- **[Quick Reference](docs/quick-reference.md)** - Commands and workflows at a glance
+- **[Safety Design](docs/safety-design.md)** - Deep dive into watchdog, fault masking, validation, and more
+- **[Troubleshooting Guide](docs/troubleshooting.md)** - Debug activation failures, timeouts, watchdog issues, etc.
+- **[Error Reference](docs/error-reference.md)** - Decode axis/motor/encoder/controller error codes
+- **[Configuration Guide](docs/configuration-guide.md)** - Tune parameters for your application
+- **[Documentation Index](docs/README.md)** - Complete documentation organized by role and task
+- **[Changelog](CHANGELOG.md)** - Recent improvements and release notes
+- [Project wiki](https://github.com/Factor-Robotics/odrive_ros2_control/wiki/Documentation) – upstream documentation, firmware notes, and calibration tips
+- [ros2_control documentation](https://control.ros.org/) – controller manager usage, interface concepts, and best practices
+- [`odrive_demo_description` URDF](odrive_demo_description/urdf/odrive.ros2_control.xacro) – ready-to-use macro for your robot description
 
 ## License
 
