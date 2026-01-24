@@ -117,11 +117,19 @@ public:
 
   std::size_t pending_writes() const {return write_expectations_.size();}
 
+  // Enable permissive mode for concurrent testing - allows operations without strict expectations
+  void set_permissive_mode(bool enabled) {permissive_mode_ = enabled;}
+
 protected:
   int read_impl(
     std::int64_t serial_number, std::int16_t endpoint_id, void * value,
     std::size_t size) override
   {
+    if (permissive_mode_) {
+      // In permissive mode, return success with zeroed data
+      std::memset(value, 0, size);
+      return 0;
+    }
     if (read_expectations_.empty()) {
       ADD_FAILURE() << "Unexpected read for endpoint " << endpoint_id;
       return -1;
@@ -142,6 +150,10 @@ protected:
     std::int64_t serial_number, std::int16_t endpoint_id, const void * value,
     std::size_t size) override
   {
+    if (permissive_mode_) {
+      // In permissive mode, accept all writes
+      return 0;
+    }
     if (write_expectations_.empty()) {
       ADD_FAILURE() << "Unexpected write for endpoint " << endpoint_id;
       return -1;
@@ -162,6 +174,10 @@ protected:
 
   int call(std::int64_t serial_number, std::int16_t endpoint_id) override
   {
+    if (permissive_mode_) {
+      // In permissive mode, accept all calls
+      return 0;
+    }
     if (call_expectations_.empty()) {
       ADD_FAILURE() << "Unexpected call for endpoint " << endpoint_id;
       return -1;
@@ -180,5 +196,6 @@ private:
   std::deque<ReadExpectation> read_expectations_;
   std::deque<WriteExpectation> write_expectations_;
   std::deque<CallExpectation> call_expectations_;
+  bool permissive_mode_{false};
 };
 }  // namespace odrive_hardware_interface

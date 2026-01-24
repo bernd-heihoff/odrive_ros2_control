@@ -352,9 +352,51 @@ CallbackReturn ODriveHardwareInterface::configure_from_info(
   last_diagnostics_update_.reset();
 
   safety_config_ = SafetyConfig{};
+  runtime_config_ = RuntimeConfig{};
 
   {
     auto params = info_.hardware_parameters;
+
+    // Parse runtime configuration parameters
+    auto usb_timeout_it = params.find("usb_timeout_ms");
+    if (usb_timeout_it != params.end()) {
+      try {
+        unsigned int parsed = std::stoul(usb_timeout_it->second);
+        if (parsed > 0 && parsed <= 10000) {
+          runtime_config_.usb_timeout_ms = parsed;
+        } else {
+          RCUTILS_LOG_WARN_NAMED(
+            kLoggerName,
+            "usb_timeout_ms value %u out of range [1, 10000]; keeping default %u",
+            parsed, runtime_config_.usb_timeout_ms);
+        }
+      } catch (const std::exception &) {
+        RCUTILS_LOG_WARN_NAMED(
+          kLoggerName,
+          "Invalid usb_timeout_ms value '%s'; keeping default %u",
+          usb_timeout_it->second.c_str(), runtime_config_.usb_timeout_ms);
+      }
+    }
+
+    auto log_throttle_it = params.find("log_throttle_ms");
+    if (log_throttle_it != params.end()) {
+      try {
+        unsigned int parsed = std::stoul(log_throttle_it->second);
+        if (parsed >= 100 && parsed <= 60000) {
+          runtime_config_.log_throttle_ms = parsed;
+        } else {
+          RCUTILS_LOG_WARN_NAMED(
+            kLoggerName,
+            "log_throttle_ms value %u out of range [100, 60000]; keeping default %u",
+            parsed, runtime_config_.log_throttle_ms);
+        }
+      } catch (const std::exception &) {
+        RCUTILS_LOG_WARN_NAMED(
+          kLoggerName,
+          "Invalid log_throttle_ms value '%s'; keeping default %u",
+          log_throttle_it->second.c_str(), runtime_config_.log_throttle_ms);
+      }
+    }
 
     auto bool_it = params.find("gate_outputs_with_lifecycle");
     if (bool_it != params.end()) {
@@ -820,6 +862,8 @@ void ODriveHardwareInterface::populate_joint_diagnostics(
   diagnostic_updater::DiagnosticStatusWrapper & status,
   std::size_t index) const
 {
+  std::lock_guard<std::mutex> lock(state_mutex_);
+
   const auto & joint_info = info_.joints[index];
   const auto & joint = joints_[index];
 
@@ -925,6 +969,8 @@ void ODriveHardwareInterface::populate_drive_diagnostics(
   diagnostic_updater::DiagnosticStatusWrapper & status,
   std::size_t index) const
 {
+  std::lock_guard<std::mutex> lock(state_mutex_);
+
   const auto & drive = drives_[index];
 
   bool fault_detected = false;
@@ -1000,6 +1046,8 @@ void ODriveHardwareInterface::populate_sensor_diagnostics(
   diagnostic_updater::DiagnosticStatusWrapper & status,
   std::size_t index) const
 {
+  std::lock_guard<std::mutex> lock(state_mutex_);
+
   const auto & sensor_info = info_.sensors[index];
   const auto & sensor = sensors_[index];
 
@@ -1036,6 +1084,8 @@ void ODriveHardwareInterface::maybe_update_diagnostics()
 
 return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Duration &)
 {
+  std::lock_guard<std::mutex> lock(state_mutex_);
+
   // If transport lost (disconnected during operation), set all joints unhealthy and return.
   // Recovery requires deactivate+activate cycle.
   if (!transport_) {
@@ -1191,6 +1241,7 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
 
 return_type ODriveHardwareInterface::write(const rclcpp::Time & time, const rclcpp::Duration &)
 {
+  std::lock_guard<std::mutex> lock(state_mutex_);
   (void)time;
 
   // If transport lost, skip all writes. Joints are already marked unhealthy in read().

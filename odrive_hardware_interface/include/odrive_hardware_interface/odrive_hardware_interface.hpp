@@ -21,6 +21,7 @@
 #include <functional>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <thread>
@@ -119,6 +120,14 @@ private:
     bool request_idle_on_axis_fault{true};
   };
 
+  struct RuntimeConfig
+  {
+    // USB communication timeout in milliseconds
+    unsigned int usb_timeout_ms{100};
+    // Throttle interval for repeated log messages in milliseconds
+    unsigned int log_throttle_ms{2000};
+  };
+
   CallbackReturn initialize_transport();
   void reset_runtime_state();
   void register_diagnostics_tasks();
@@ -200,6 +209,7 @@ private:
   std::unique_ptr<ODriveTransport> transport_;
 
   SafetyConfig safety_config_;
+  RuntimeConfig runtime_config_;
   bool outputs_enabled_{false};
 
   // Runtime tracking for axis fault masking.
@@ -217,6 +227,10 @@ private:
   std::shared_ptr<DiagnosticsInterface> diagnostics_;
   DiagnosticsInterface::Duration diagnostics_period_{DiagnosticsInterface::Duration::zero()};
   std::optional<DiagnosticsInterface::TimePoint> last_diagnostics_update_;
+
+  // Thread safety: protects concurrent access to sensors_, drives_, and joints_
+  // from read(), write(), and diagnostics callbacks
+  mutable std::mutex state_mutex_;
 
   std::vector<SensorContext> sensors_;
   std::vector<DriveContext> drives_;
