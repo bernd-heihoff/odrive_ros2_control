@@ -70,6 +70,8 @@ if(BUILD_TESTING)
     "include/odrive_hardware_interface/odrive_endpoints.hpp"
     "include/odrive_hardware_interface/install/_local_setup_util_ps1.py"
     "include/odrive_hardware_interface/install/_local_setup_util_sh.py")
+  # Exclude build and install directories from linting
+  set(AMENT_LINT_AUTO_EXCLUDE_BUILD_DIRS TRUE)
   find_package(ament_cmake_gtest REQUIRED)
   # the following line skips the linter which checks for copyrights
   # uncomment the line when a copyright and license is not present in all source files

@@ -493,7 +493,8 @@ TEST(TransportErrorStateTest, HealthyDoesNotRemainStaleAcrossJointsWhenReadAbort
     EXPECT_EQ(1.0, healthy1->get_value());
   }
 
-  // Second read fails on wheel0's iq_measured; read() continues with axis1 and marks both unhealthy.
+  // Second read fails on wheel0's iq_measured; read() continues with axis1
+  // and marks both unhealthy.
   {
     const std::uint32_t can_error = 0U;
     transport->expect_read(serial, odrive::CAN__ERROR, can_error);
@@ -611,7 +612,6 @@ TEST(TransportErrorStateTest, UpdatesOnVbusReadFailure)
   EXPECT_TRUE(transport->expectations_satisfied());
   // transport_error is cleared by successful joint telemetry read (joint uses same serial)
   EXPECT_EQ(0.0, transport_error->get_value());
-
 }
 
 TEST(TransportErrorStateTest, UpdatesOnAxisTelemetryReadFailure)

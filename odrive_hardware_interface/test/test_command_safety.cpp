@@ -557,9 +557,11 @@ TEST_F(CommandSafetyTest, ReportsErrorWhenTransportFailsDuringWrite)
     torque_endpoint,
     static_cast<float>(effort));
 
-  // Write should return OK even when transport fails (state-interface-only error communication)
+  // Write should return OK even when transport fails
+  // (state-interface-only error communication)
   EXPECT_EQ(return_type::OK, interface.write(rclcpp::Time{}, rclcpp::Duration(0, 0)));
-  // But the failed write should leave pending writes (position failed, so velocity and torque remain)
+  // But the failed write should leave pending writes
+  // (position failed, so velocity and torque remain)
   EXPECT_EQ(2U, transport->pending_writes());
 }
 }  // namespace
