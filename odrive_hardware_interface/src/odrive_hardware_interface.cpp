@@ -1040,7 +1040,12 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
       status != 0)
     {
       sensors_[i].transport_error = static_cast<double>(status);
-      return to_io_return(status, "reading vbus voltage");
+      sensors_[i].vbus_voltage = std::numeric_limits<double>::quiet_NaN();
+      RCUTILS_LOG_WARN_THROTTLE(
+        RCUTILS_STEADY_TIME, 2000, kLoggerName,
+        "Transport error (%d) reading vbus voltage for sensor[%zu] (serial 0x%" PRIx64 "); continuing",
+        status, i, static_cast<std::uint64_t>(sensors_[i].serial_number));
+      continue;
     }
     sensors_[i].vbus_voltage = vbus_voltage;
     sensors_[i].transport_error = 0.0;
@@ -1079,9 +1084,15 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
 
       joints_[i].read_error = static_cast<double>(status);
       joints_[i].telemetry_valid = 0.0;
+      joints_[i].healthy = 0.0;
       std::string action = failing_stage.empty() ? "reading axis telemetry" :
         "reading axis telemetry (" + failing_stage + ")";
-      return to_io_return(status, action);
+      RCUTILS_LOG_WARN_THROTTLE(
+        RCUTILS_STEADY_TIME, 2000, kLoggerName,
+        "Transport error (%d) %s for joint[%zu]='%s' (serial 0x%" PRIx64 " axis %d); continuing",
+        status, action.c_str(), i, info_.joints[i].name.c_str(),
+        static_cast<std::uint64_t>(joints_[i].serial_number), joints_[i].axis);
+      continue;
     }
 
     // Independent single-source-of-truth health flag: computed from the raw values just read.
@@ -1231,9 +1242,13 @@ return_type ODriveHardwareInterface::write(const rclcpp::Time & time, const rclc
           requested_state);
         if (status != 0) {
           joints_[i].write_error = static_cast<double>(status);
-          return to_io_return(status, "requesting axis idle state after fault");
+          RCUTILS_LOG_WARN_THROTTLE(
+            RCUTILS_STEADY_TIME, 2000, kLoggerName,
+            "Transport error (%d) requesting axis idle state after fault for joint[%zu]='%s'; continuing",
+            status, i, info_.joints[i].name.c_str());
+        } else {
+          idle_requested_on_fault_[i] = true;
         }
-        idle_requested_on_fault_[i] = true;
       }
       continue;
     }
@@ -1259,7 +1274,12 @@ return_type ODriveHardwareInterface::write(const rclcpp::Time & time, const rclc
         "writing axis command (" + failing_stage + ")";
 
       joints_[i].write_error = static_cast<double>(status);
-      return to_io_return(status, action);
+      RCUTILS_LOG_WARN_THROTTLE(
+        RCUTILS_STEADY_TIME, 2000, kLoggerName,
+        "Transport error (%d) %s for joint[%zu]='%s' (serial 0x%" PRIx64 " axis %d); continuing",
+        status, action.c_str(), i, info_.joints[i].name.c_str(),
+        static_cast<std::uint64_t>(joints_[i].serial_number), joints_[i].axis);
+      continue;
     }
 
     joints_[i].write_error = 0.0;
