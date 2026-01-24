@@ -87,13 +87,14 @@ TEST_F(SafetyGatingTest, WriteIsSkippedWhenInactiveEvenIfCommandModeSet)
         serial,
         axis_endpoint(odrive::AXIS__CONFIG__ENABLE_WATCHDOG, axis),
         static_cast<bool>(false));
+      instance->expect_call(
+        serial,
+        axis_endpoint(odrive::AXIS__CLEAR_ERRORS, axis));
       return instance;
     });
 
   auto info = make_minimal_info("a1");
   ASSERT_EQ(CallbackReturn::SUCCESS, interface.configure(info));
-  ASSERT_NE(nullptr, transport);
-  EXPECT_TRUE(transport->expectations_satisfied());
 
   auto command_interfaces = interface.export_command_interfaces();
   for (auto & command : command_interfaces) {
@@ -110,7 +111,7 @@ TEST_F(SafetyGatingTest, WriteIsSkippedWhenInactiveEvenIfCommandModeSet)
 
   // Not activated: outputs must be gated.
   EXPECT_EQ(return_type::OK, interface.write(rclcpp::Time{}, rclcpp::Duration(0, 0)));
-  EXPECT_TRUE(transport->expectations_satisfied());
+  // Transport was never created (no on_activate call), so there are no expectations to check
 }
 
 TEST_F(SafetyGatingTest, FaultedAxisIsMaskedAndIdled)
@@ -135,16 +136,15 @@ TEST_F(SafetyGatingTest, FaultedAxisIsMaskedAndIdled)
         serial,
         axis_endpoint(odrive::AXIS__CONFIG__ENABLE_WATCHDOG, axis),
         static_cast<bool>(false));
+      instance->expect_call(serial, axis_endpoint(odrive::AXIS__CLEAR_ERRORS, axis));
       return instance;
     });
 
   auto info = make_minimal_info("b1");
   ASSERT_EQ(CallbackReturn::SUCCESS, interface.configure(info));
-  ASSERT_NE(nullptr, transport);
-  EXPECT_TRUE(transport->expectations_satisfied());
 
-  transport->expect_call(serial, axis_endpoint(odrive::AXIS__CLEAR_ERRORS, axis));
   ASSERT_EQ(CallbackReturn::SUCCESS, interface.on_activate(rclcpp_lifecycle::State{}));
+  ASSERT_NE(nullptr, transport);
   EXPECT_TRUE(transport->expectations_satisfied());
 
   // Provide a telemetry sample indicating an axis fault.

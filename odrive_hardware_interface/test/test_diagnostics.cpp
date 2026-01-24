@@ -25,6 +25,7 @@
 #include "hardware_interface/hardware_info.hpp"
 #include "odrive_hardware_interface/axis_utils.hpp"
 #include "odrive_hardware_interface/odrive_hardware_interface.hpp"
+#include "rclcpp_lifecycle/state.hpp"
 #include "test_support/mock_transport.hpp"
 #include "test_support/fake_diagnostics.hpp"
 
@@ -189,6 +190,9 @@ void configure_default_transport_factory(
         serial,
         axis_endpoint(odrive::AXIS__CONFIG__ENABLE_WATCHDOG, axis),
         static_cast<bool>(false));
+      instance->expect_call(
+        serial,
+        axis_endpoint(odrive::AXIS__CLEAR_ERRORS, axis));
       return instance;
     });
 }
@@ -203,6 +207,7 @@ TEST(DiagnosticsConfigTest, PublishDiagnosticsFalseDisablesDiagnostics)
   info.hardware_parameters["publish_diagnostics"] = "false";
 
   ASSERT_TRUE(helper.configure(info));
+  ASSERT_EQ(CallbackReturn::SUCCESS, helper.on_activate(rclcpp_lifecycle::State{}));
   ASSERT_NE(nullptr, transport);
   EXPECT_TRUE(transport->expectations_satisfied());
 
@@ -234,6 +239,9 @@ TEST(DiagnosticsConfigTest, MissingFactoryDisablesDiagnostics)
         serial,
         axis_endpoint(odrive::AXIS__CONFIG__ENABLE_WATCHDOG, axis),
         static_cast<bool>(false));
+      instance->expect_call(
+        serial,
+        axis_endpoint(odrive::AXIS__CLEAR_ERRORS, axis));
       return instance;
     });
 
@@ -241,6 +249,7 @@ TEST(DiagnosticsConfigTest, MissingFactoryDisablesDiagnostics)
   info.hardware_parameters["publish_diagnostics"] = "true";
 
   ASSERT_TRUE(helper.configure(info));
+  ASSERT_EQ(CallbackReturn::SUCCESS, helper.on_activate(rclcpp_lifecycle::State{}));
   ASSERT_NE(nullptr, transport);
   EXPECT_TRUE(transport->expectations_satisfied());
 
@@ -261,6 +270,7 @@ TEST(DiagnosticsConfigTest, ValidParametersOverrideDefaults)
   info.hardware_parameters["diagnostics_error_temperature_deg_c"] = "70.5";
 
   ASSERT_TRUE(helper.configure(info));
+  ASSERT_EQ(CallbackReturn::SUCCESS, helper.on_activate(rclcpp_lifecycle::State{}));
   ASSERT_NE(nullptr, transport);
   EXPECT_TRUE(transport->expectations_satisfied());
 
@@ -284,6 +294,7 @@ TEST(DiagnosticsConfigTest, InvalidParametersFallBackToDefaults)
   info.hardware_parameters["diagnostics_error_temperature_deg_c"] = "oops";
 
   ASSERT_TRUE(helper.configure(info));
+  ASSERT_EQ(CallbackReturn::SUCCESS, helper.on_activate(rclcpp_lifecycle::State{}));
   ASSERT_NE(nullptr, transport);
   EXPECT_TRUE(transport->expectations_satisfied());
 

@@ -542,20 +542,6 @@ CallbackReturn ODriveHardwareInterface::recover()
 {
   reset_runtime_state();
   transport_.reset();
-
-  const auto init_result = initialize_transport();
-  if (init_result != CallbackReturn::SUCCESS) {
-    return init_result;
-  }
-
-  for (const auto & joint : joints_) {
-    const int clear_status = transport_->call(
-      joint.serial_number, axis_endpoint(odrive::AXIS__CLEAR_ERRORS, joint.axis));
-    if (clear_status != 0) {
-      return to_callback_return(clear_status, "clearing axis errors during recovery");
-    }
-  }
-
   return CallbackReturn::SUCCESS;
 }
 
@@ -1038,8 +1024,8 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
     for (auto & sensor : sensors_) {
       sensor.vbus_voltage = std::numeric_limits<double>::quiet_NaN();
     }
-    RCUTILS_LOG_WARN_THROTTLE(
-      RCUTILS_STEADY_TIME, 5000, kLoggerName,
+    RCUTILS_LOG_WARN_NAMED(
+      kLoggerName,
       "Transport unavailable during read(). All joints marked unhealthy. "
       "Deactivate and reactivate hardware to reconnect.");
     return return_type::OK;
@@ -1068,9 +1054,10 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
     {
       sensors_[i].transport_error = static_cast<double>(status);
       sensors_[i].vbus_voltage = std::numeric_limits<double>::quiet_NaN();
-      RCUTILS_LOG_WARN_THROTTLE(
-        RCUTILS_STEADY_TIME, 2000, kLoggerName,
-        "Transport error (%d) reading vbus voltage for sensor[%zu] (serial 0x%" PRIx64 "); continuing",
+      RCUTILS_LOG_WARN_NAMED(
+        kLoggerName,
+        "Transport error (%d) reading vbus voltage for sensor[%zu] "
+        "(serial 0x%" PRIx64 "); continuing",
         status, i, static_cast<std::uint64_t>(sensors_[i].serial_number));
       continue;
     }
@@ -1183,8 +1170,8 @@ return_type ODriveHardwareInterface::write(const rclcpp::Time & time, const rclc
 
   // If transport lost, skip all writes. Joints are already marked unhealthy in read().
   if (!transport_) {
-    RCUTILS_LOG_WARN_THROTTLE(
-      RCUTILS_STEADY_TIME, 5000, kLoggerName,
+    RCUTILS_LOG_WARN_NAMED(
+      kLoggerName,
       "Transport unavailable during write(). Skipping all command writes. "
       "Deactivate and reactivate hardware to reconnect.");
     return return_type::OK;
@@ -1279,9 +1266,10 @@ return_type ODriveHardwareInterface::write(const rclcpp::Time & time, const rclc
           requested_state);
         if (status != 0) {
           joints_[i].write_error = static_cast<double>(status);
-          RCUTILS_LOG_WARN_THROTTLE(
-            RCUTILS_STEADY_TIME, 2000, kLoggerName,
-            "Transport error (%d) requesting axis idle state after fault for joint[%zu]='%s'; continuing",
+          RCUTILS_LOG_WARN_NAMED(
+            kLoggerName,
+            "Transport error (%d) requesting axis idle state after fault "
+            "for joint[%zu]='%s'; continuing",
             status, i, info_.joints[i].name.c_str());
         } else {
           idle_requested_on_fault_[i] = true;

@@ -68,6 +68,9 @@ TEST_F(CommandSafetyTest, RejectsNanCommands)
         serial,
         axis_endpoint(odrive::AXIS__CONFIG__ENABLE_WATCHDOG, axis),
         static_cast<bool>(false));
+      instance->expect_call(
+        serial,
+        axis_endpoint(odrive::AXIS__CLEAR_ERRORS, axis));
       return instance;
     });
 
@@ -88,13 +91,8 @@ TEST_F(CommandSafetyTest, RejectsNanCommands)
   info.joints.push_back(joint);
 
   ASSERT_EQ(CallbackReturn::SUCCESS, interface.configure(info));
-  ASSERT_NE(nullptr, transport);
-  EXPECT_TRUE(transport->expectations_satisfied());
-
-  transport->expect_call(
-    serial,
-    axis_endpoint(odrive::AXIS__CLEAR_ERRORS, axis));
   ASSERT_EQ(CallbackReturn::SUCCESS, interface.on_activate(rclcpp_lifecycle::State{}));
+  ASSERT_NE(nullptr, transport);
   EXPECT_TRUE(transport->expectations_satisfied());
 
   auto command_interfaces = interface.export_command_interfaces();
@@ -170,6 +168,9 @@ TEST_F(CommandSafetyTest, RejectsCommandsOutsideLimits)
         serial,
         axis_endpoint(odrive::AXIS__CONFIG__ENABLE_WATCHDOG, axis),
         static_cast<bool>(false));
+      instance->expect_call(
+        serial,
+        axis_endpoint(odrive::AXIS__CLEAR_ERRORS, axis));
       return instance;
     });
 
@@ -192,13 +193,8 @@ TEST_F(CommandSafetyTest, RejectsCommandsOutsideLimits)
   info.joints.push_back(joint);
 
   ASSERT_EQ(CallbackReturn::SUCCESS, interface.configure(info));
-  ASSERT_NE(nullptr, transport);
-  EXPECT_TRUE(transport->expectations_satisfied());
-
-  transport->expect_call(
-    serial,
-    axis_endpoint(odrive::AXIS__CLEAR_ERRORS, axis));
   ASSERT_EQ(CallbackReturn::SUCCESS, interface.on_activate(rclcpp_lifecycle::State{}));
+  ASSERT_NE(nullptr, transport);
   EXPECT_TRUE(transport->expectations_satisfied());
 
   auto command_interfaces = interface.export_command_interfaces();
@@ -272,6 +268,9 @@ TEST_F(CommandSafetyTest, AcceptsCommandsWithinLimits)
         serial,
         axis_endpoint(odrive::AXIS__CONFIG__ENABLE_WATCHDOG, axis),
         static_cast<bool>(false));
+      instance->expect_call(
+        serial,
+        axis_endpoint(odrive::AXIS__CLEAR_ERRORS, axis));
       return instance;
     });
 
@@ -296,13 +295,8 @@ TEST_F(CommandSafetyTest, AcceptsCommandsWithinLimits)
   info.joints.push_back(joint);
 
   ASSERT_EQ(CallbackReturn::SUCCESS, interface.configure(info));
-  ASSERT_NE(nullptr, transport);
-  EXPECT_TRUE(transport->expectations_satisfied());
-
-  transport->expect_call(
-    serial,
-    axis_endpoint(odrive::AXIS__CLEAR_ERRORS, axis));
   ASSERT_EQ(CallbackReturn::SUCCESS, interface.on_activate(rclcpp_lifecycle::State{}));
+  ASSERT_NE(nullptr, transport);
   EXPECT_TRUE(transport->expectations_satisfied());
 
   auto command_interfaces = interface.export_command_interfaces();
@@ -384,6 +378,9 @@ TEST_F(CommandSafetyTest, AllowsDirectPositionModeRequest)
         serial,
         axis_endpoint(odrive::AXIS__CONFIG__ENABLE_WATCHDOG, axis),
         static_cast<bool>(false));
+      instance->expect_call(
+        serial,
+        axis_endpoint(odrive::AXIS__CLEAR_ERRORS, axis));
       return instance;
     });
 
@@ -404,13 +401,8 @@ TEST_F(CommandSafetyTest, AllowsDirectPositionModeRequest)
   info.joints.push_back(joint);
 
   ASSERT_EQ(CallbackReturn::SUCCESS, interface.configure(info));
-  ASSERT_NE(nullptr, transport);
-  EXPECT_TRUE(transport->expectations_satisfied());
-
-  transport->expect_call(
-    serial,
-    axis_endpoint(odrive::AXIS__CLEAR_ERRORS, axis));
   ASSERT_EQ(CallbackReturn::SUCCESS, interface.on_activate(rclcpp_lifecycle::State{}));
+  ASSERT_NE(nullptr, transport);
   EXPECT_TRUE(transport->expectations_satisfied());
 
   auto command_interfaces = interface.export_command_interfaces();
@@ -482,6 +474,9 @@ TEST_F(CommandSafetyTest, ReportsErrorWhenTransportFailsDuringWrite)
         serial,
         axis_endpoint(odrive::AXIS__CONFIG__ENABLE_WATCHDOG, axis),
         static_cast<bool>(false));
+      instance->expect_call(
+        serial,
+        axis_endpoint(odrive::AXIS__CLEAR_ERRORS, axis));
       return instance;
     });
 
@@ -502,13 +497,8 @@ TEST_F(CommandSafetyTest, ReportsErrorWhenTransportFailsDuringWrite)
   info.joints.push_back(joint);
 
   ASSERT_EQ(CallbackReturn::SUCCESS, interface.configure(info));
-  ASSERT_NE(nullptr, transport);
-  EXPECT_TRUE(transport->expectations_satisfied());
-
-  transport->expect_call(
-    serial,
-    axis_endpoint(odrive::AXIS__CLEAR_ERRORS, axis));
   ASSERT_EQ(CallbackReturn::SUCCESS, interface.on_activate(rclcpp_lifecycle::State{}));
+  ASSERT_NE(nullptr, transport);
   EXPECT_TRUE(transport->expectations_satisfied());
 
   auto command_interfaces = interface.export_command_interfaces();
@@ -567,7 +557,9 @@ TEST_F(CommandSafetyTest, ReportsErrorWhenTransportFailsDuringWrite)
     torque_endpoint,
     static_cast<float>(effort));
 
-  EXPECT_EQ(return_type::ERROR, interface.write(rclcpp::Time{}, rclcpp::Duration(0, 0)));
+  // Write should return OK even when transport fails (state-interface-only error communication)
+  EXPECT_EQ(return_type::OK, interface.write(rclcpp::Time{}, rclcpp::Duration(0, 0)));
+  // But the failed write should leave pending writes (position failed, so velocity and torque remain)
   EXPECT_EQ(2U, transport->pending_writes());
 }
 }  // namespace

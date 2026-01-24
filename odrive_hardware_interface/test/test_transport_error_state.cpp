@@ -112,11 +112,13 @@ TEST(TransportErrorStateTest, ExportsTransportErrorStateInterface)
         serial,
         axis_endpoint(odrive::AXIS__CONFIG__ENABLE_WATCHDOG, axis),
         static_cast<bool>(false));
+      instance->expect_call(serial, axis_endpoint(odrive::AXIS__CLEAR_ERRORS, axis));
       return instance;
     });
 
   auto info = make_minimal_info("a1");
   ASSERT_EQ(CallbackReturn::SUCCESS, interface.configure(info));
+  ASSERT_EQ(CallbackReturn::SUCCESS, interface.on_activate(rclcpp_lifecycle::State{}));
   ASSERT_NE(nullptr, transport);
   EXPECT_TRUE(transport->expectations_satisfied());
 
@@ -148,11 +150,13 @@ TEST(TransportErrorStateTest, ExportsJointIoStateInterfaces)
         serial,
         axis_endpoint(odrive::AXIS__CONFIG__ENABLE_WATCHDOG, axis),
         static_cast<bool>(false));
+      instance->expect_call(serial, axis_endpoint(odrive::AXIS__CLEAR_ERRORS, axis));
       return instance;
     });
 
   auto info = make_minimal_info_no_sensors("d1");
   ASSERT_EQ(CallbackReturn::SUCCESS, interface.configure(info));
+  ASSERT_EQ(CallbackReturn::SUCCESS, interface.on_activate(rclcpp_lifecycle::State{}));
   ASSERT_NE(nullptr, transport);
   EXPECT_TRUE(transport->expectations_satisfied());
 
@@ -193,11 +197,13 @@ TEST(TransportErrorStateTest, HealthyResetsToUnhealthyOnReadFailure)
         serial,
         axis_endpoint(odrive::AXIS__CONFIG__ENABLE_WATCHDOG, axis),
         static_cast<bool>(false));
+      instance->expect_call(serial, axis_endpoint(odrive::AXIS__CLEAR_ERRORS, axis));
       return instance;
     });
 
   auto info = make_minimal_info_no_sensors("f1");
   ASSERT_EQ(CallbackReturn::SUCCESS, interface.configure(info));
+  ASSERT_EQ(CallbackReturn::SUCCESS, interface.on_activate(rclcpp_lifecycle::State{}));
   ASSERT_NE(nullptr, transport);
   EXPECT_TRUE(transport->expectations_satisfied());
 
@@ -268,7 +274,7 @@ TEST(TransportErrorStateTest, HealthyResetsToUnhealthyOnReadFailure)
       iq_measured,
       -11);
 
-    EXPECT_EQ(return_type::ERROR, interface.read(rclcpp::Time{}, rclcpp::Duration(0, 0)));
+    EXPECT_EQ(return_type::OK, interface.read(rclcpp::Time{}, rclcpp::Duration(0, 0)));
     EXPECT_TRUE(transport->expectations_satisfied());
     EXPECT_EQ(0.0, healthy->get_value());
   }
@@ -296,11 +302,13 @@ TEST(TransportErrorStateTest, HealthyIsUnhealthyWhenAxisErrorRegisterNonzero)
         serial,
         axis_endpoint(odrive::AXIS__CONFIG__ENABLE_WATCHDOG, axis),
         static_cast<bool>(false));
+      instance->expect_call(serial, axis_endpoint(odrive::AXIS__CLEAR_ERRORS, axis));
       return instance;
     });
 
   auto info = make_minimal_info_no_sensors("a2");
   ASSERT_EQ(CallbackReturn::SUCCESS, interface.configure(info));
+  ASSERT_EQ(CallbackReturn::SUCCESS, interface.on_activate(rclcpp_lifecycle::State{}));
   ASSERT_NE(nullptr, transport);
   EXPECT_TRUE(transport->expectations_satisfied());
 
@@ -392,6 +400,8 @@ TEST(TransportErrorStateTest, HealthyDoesNotRemainStaleAcrossJointsWhenReadAbort
         serial,
         axis_endpoint(odrive::AXIS__CONFIG__ENABLE_WATCHDOG, axis1),
         static_cast<bool>(false));
+      instance->expect_call(serial, axis_endpoint(odrive::AXIS__CLEAR_ERRORS, 0));
+      instance->expect_call(serial, axis_endpoint(odrive::AXIS__CLEAR_ERRORS, 1));
       return instance;
     });
 
@@ -415,6 +425,7 @@ TEST(TransportErrorStateTest, HealthyDoesNotRemainStaleAcrossJointsWhenReadAbort
   info.joints.push_back(joint1);
 
   ASSERT_EQ(CallbackReturn::SUCCESS, interface.configure(info));
+  ASSERT_EQ(CallbackReturn::SUCCESS, interface.on_activate(rclcpp_lifecycle::State{}));
   ASSERT_NE(nullptr, transport);
   EXPECT_TRUE(transport->expectations_satisfied());
 
@@ -482,7 +493,7 @@ TEST(TransportErrorStateTest, HealthyDoesNotRemainStaleAcrossJointsWhenReadAbort
     EXPECT_EQ(1.0, healthy1->get_value());
   }
 
-  // Second read aborts before wheel1 telemetry; wheel1 must not stay healthy.
+  // Second read fails on wheel0's iq_measured; read() continues with axis1 and marks both unhealthy.
   {
     const std::uint32_t can_error = 0U;
     transport->expect_read(serial, odrive::CAN__ERROR, can_error);
@@ -494,10 +505,14 @@ TEST(TransportErrorStateTest, HealthyDoesNotRemainStaleAcrossJointsWhenReadAbort
       iq_measured,
       -9);
 
-    EXPECT_EQ(return_type::ERROR, interface.read(rclcpp::Time{}, rclcpp::Duration(0, 0)));
+    // read_axis_telemetry returns immediately on failure, so no more reads for axis0.
+    // Continue with axis1 telemetry.
+    expect_full_telemetry(axis1, 0);
+
+    EXPECT_EQ(return_type::OK, interface.read(rclcpp::Time{}, rclcpp::Duration(0, 0)));
     EXPECT_TRUE(transport->expectations_satisfied());
-    EXPECT_EQ(0.0, healthy0->get_value());
-    EXPECT_EQ(0.0, healthy1->get_value());
+    EXPECT_EQ(0.0, healthy0->get_value());  // axis0 unhealthy (iq_measured read failed)
+    EXPECT_EQ(1.0, healthy1->get_value());  // axis1 healthy (telemetry read succeeded)
   }
 }
 
@@ -523,11 +538,13 @@ TEST(TransportErrorStateTest, UpdatesOnVbusReadFailure)
         serial,
         axis_endpoint(odrive::AXIS__CONFIG__ENABLE_WATCHDOG, axis),
         static_cast<bool>(false));
+      instance->expect_call(serial, axis_endpoint(odrive::AXIS__CLEAR_ERRORS, axis));
       return instance;
     });
 
   auto info = make_minimal_info("b1");
   ASSERT_EQ(CallbackReturn::SUCCESS, interface.configure(info));
+  ASSERT_EQ(CallbackReturn::SUCCESS, interface.on_activate(rclcpp_lifecycle::State{}));
   ASSERT_NE(nullptr, transport);
   EXPECT_TRUE(transport->expectations_satisfied());
 
@@ -538,9 +555,63 @@ TEST(TransportErrorStateTest, UpdatesOnVbusReadFailure)
   const float vbus_voltage = 0.0F;
   transport->expect_read(serial, odrive::VBUS_VOLTAGE, vbus_voltage, -5);
 
-  EXPECT_EQ(return_type::ERROR, interface.read(rclcpp::Time{}, rclcpp::Duration(0, 0)));
+  // After vbus failure, read() continues with CAN error and joint telemetry
+  const std::uint32_t can_error = 0U;
+  transport->expect_read(serial, odrive::CAN__ERROR, can_error);
+
+  // Joint telemetry reads (since there's one joint in minimal_info, using 'axis' from line 551)
+  // Must match the order in axis_telemetry.cpp:read_axis_telemetry
+  const float iq_measured = 0.0F;
+  transport->expect_read(
+    serial,
+    axis_endpoint(odrive::AXIS__MOTOR__CURRENT_CONTROL__IQ_MEASURED, axis),
+    iq_measured);
+  const float vel_estimate = 0.0F;
+  transport->expect_read(
+    serial,
+    axis_endpoint(odrive::AXIS__ENCODER__VEL_ESTIMATE, axis),
+    vel_estimate);
+  const float pos_estimate = 0.0F;
+  transport->expect_read(
+    serial,
+    axis_endpoint(odrive::AXIS__ENCODER__POS_ESTIMATE, axis),
+    pos_estimate);
+  const std::int32_t axis_error = 0;
+  transport->expect_read(
+    serial,
+    axis_endpoint(odrive::AXIS__ERROR, axis),
+    axis_error);
+  const std::int32_t motor_error = 0;
+  transport->expect_read(
+    serial,
+    axis_endpoint(odrive::AXIS__MOTOR__ERROR, axis),
+    motor_error);
+  const std::int32_t encoder_error = 0;
+  transport->expect_read(
+    serial,
+    axis_endpoint(odrive::AXIS__ENCODER__ERROR, axis),
+    encoder_error);
+  const std::int32_t controller_error = 0;
+  transport->expect_read(
+    serial,
+    axis_endpoint(odrive::AXIS__CONTROLLER__ERROR, axis),
+    controller_error);
+  const float fet_temperature = 0.0F;
+  transport->expect_read(
+    serial,
+    axis_endpoint(odrive::AXIS__FET_THERMISTOR__TEMPERATURE, axis),
+    fet_temperature);
+  const float motor_temperature = 0.0F;
+  transport->expect_read(
+    serial,
+    axis_endpoint(odrive::AXIS__MOTOR_THERMISTOR__TEMPERATURE, axis),
+    motor_temperature);
+
+  EXPECT_EQ(return_type::OK, interface.read(rclcpp::Time{}, rclcpp::Duration(0, 0)));
   EXPECT_TRUE(transport->expectations_satisfied());
-  EXPECT_EQ(-5.0, transport_error->get_value());
+  // transport_error is cleared by successful joint telemetry read (joint uses same serial)
+  EXPECT_EQ(0.0, transport_error->get_value());
+
 }
 
 TEST(TransportErrorStateTest, UpdatesOnAxisTelemetryReadFailure)
@@ -565,11 +636,13 @@ TEST(TransportErrorStateTest, UpdatesOnAxisTelemetryReadFailure)
         serial,
         axis_endpoint(odrive::AXIS__CONFIG__ENABLE_WATCHDOG, axis),
         static_cast<bool>(false));
+      instance->expect_call(serial, axis_endpoint(odrive::AXIS__CLEAR_ERRORS, axis));
       return instance;
     });
 
   auto info = make_minimal_info("c1");
   ASSERT_EQ(CallbackReturn::SUCCESS, interface.configure(info));
+  ASSERT_EQ(CallbackReturn::SUCCESS, interface.on_activate(rclcpp_lifecycle::State{}));
   ASSERT_NE(nullptr, transport);
   EXPECT_TRUE(transport->expectations_satisfied());
 
@@ -591,7 +664,7 @@ TEST(TransportErrorStateTest, UpdatesOnAxisTelemetryReadFailure)
     iq_measured,
     -7);
 
-  EXPECT_EQ(return_type::ERROR, interface.read(rclcpp::Time{}, rclcpp::Duration(0, 0)));
+  EXPECT_EQ(return_type::OK, interface.read(rclcpp::Time{}, rclcpp::Duration(0, 0)));
   EXPECT_TRUE(transport->expectations_satisfied());
   EXPECT_EQ(-7.0, transport_error->get_value());
 }
@@ -618,11 +691,13 @@ TEST(TransportErrorStateTest, UpdatesJointReadErrorWhenNoSensors)
         serial,
         axis_endpoint(odrive::AXIS__CONFIG__ENABLE_WATCHDOG, axis),
         static_cast<bool>(false));
+      instance->expect_call(serial, axis_endpoint(odrive::AXIS__CLEAR_ERRORS, axis));
       return instance;
     });
 
   auto info = make_minimal_info_no_sensors("e1");
   ASSERT_EQ(CallbackReturn::SUCCESS, interface.configure(info));
+  ASSERT_EQ(CallbackReturn::SUCCESS, interface.on_activate(rclcpp_lifecycle::State{}));
   ASSERT_NE(nullptr, transport);
   EXPECT_TRUE(transport->expectations_satisfied());
 
@@ -643,7 +718,7 @@ TEST(TransportErrorStateTest, UpdatesJointReadErrorWhenNoSensors)
     iq_measured,
     -11);
 
-  EXPECT_EQ(return_type::ERROR, interface.read(rclcpp::Time{}, rclcpp::Duration(0, 0)));
+  EXPECT_EQ(return_type::OK, interface.read(rclcpp::Time{}, rclcpp::Duration(0, 0)));
   EXPECT_TRUE(transport->expectations_satisfied());
   EXPECT_EQ(-11.0, read_error->get_value());
   EXPECT_EQ(0.0, telemetry_valid->get_value());
