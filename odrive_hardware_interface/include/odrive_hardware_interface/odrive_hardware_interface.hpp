@@ -221,6 +221,11 @@ private:
     // 1.0 means axis telemetry read succeeded and all axis error registers were 0; 0.0 otherwise.
     double healthy{0.0};
 
+    // Rate limiter state (1.0 when limited, 0.0 otherwise)
+    double position_rate_limited{0.0};
+    double velocity_rate_limited{0.0};
+    double effort_rate_limited{0.0};
+
     AxisControlLevel control_level{AxisControlLevel::UNDEFINED};
     JointConfig::CommandLimits command_limits;
     std::uint64_t last_axis_error{0};
@@ -252,6 +257,21 @@ private:
     double warn_temperature_deg_c{85.0};
     double error_temperature_deg_c{95.0};
   } diagnostics_config_;
+
+  // Performance monitoring statistics
+  struct CycleStats
+  {
+    std::size_t read_cycles{0};
+    std::size_t write_cycles{0};
+    std::size_t read_deadline_misses{0};
+    std::size_t write_deadline_misses{0};
+    double max_read_cycle_time_sec{0.0};
+    double max_write_cycle_time_sec{0.0};
+    std::size_t usb_read_retries_total{0};
+    std::size_t usb_write_retries_total{0};
+    std::size_t command_validation_failures{0};
+    std::size_t rate_limit_events{0};
+  } cycle_stats_;
 
   std::shared_ptr<DiagnosticsInterface> diagnostics_;
   DiagnosticsInterface::Duration diagnostics_period_{DiagnosticsInterface::Duration::zero()};

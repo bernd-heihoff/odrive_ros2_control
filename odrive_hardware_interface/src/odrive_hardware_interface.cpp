@@ -36,8 +36,11 @@
 #include "odrive_hardware_interface/axis_telemetry.hpp"
 #include "odrive_hardware_interface/axis_utils.hpp"
 #include "odrive_hardware_interface/command_validation.hpp"
+#include "odrive_hardware_interface/config_limits.hpp"
+#include "odrive_hardware_interface/config_validator.hpp"
 #include "odrive_hardware_interface/error_monitoring.hpp"
 #include "odrive_hardware_interface/odrive_usb.hpp"
+#include "odrive_hardware_interface/transport_error.hpp"
 #include "rcutils/logging_macros.h"
 
 namespace odrive_hardware_interface
@@ -143,7 +146,8 @@ int read_with_retry(
   std::int16_t endpoint,
   T & value,
   unsigned int max_attempts,
-  std::chrono::milliseconds retry_delay)
+  std::chrono::milliseconds retry_delay,
+  std::size_t & retry_count)
 {
   int last_error = 0;
 
@@ -151,19 +155,25 @@ int read_with_retry(
     int status = transport.read(serial, endpoint, value);
 
     if (status == 0) {
+      if (attempt > 0) {
+        retry_count += attempt;
+      }
       return 0;  // Success
     }
 
     last_error = status;
+    TransportError err = errno_to_transport_error(status);
 
-    // Don't retry on fatal errors
-    if (status == -ENODEV || status == -EPERM || status == -EINVAL) {
+    // Don't retry fatal errors
+    if (is_fatal(err)) {
       break;
     }
 
-    // Retry on transient errors (ETIMEDOUT, EBUSY, EIO)
-    if (attempt < max_attempts - 1) {
+    // Retry on transient errors
+    if (is_retryable(err) && attempt < max_attempts - 1) {
       std::this_thread::sleep_for(retry_delay);
+    } else {
+      break;
     }
   }
 
@@ -177,7 +187,8 @@ int write_with_retry(
   std::int16_t endpoint,
   const T & value,
   unsigned int max_attempts,
-  std::chrono::milliseconds retry_delay)
+  std::chrono::milliseconds retry_delay,
+  std::size_t & retry_count)
 {
   int last_error = 0;
 
@@ -185,17 +196,23 @@ int write_with_retry(
     int status = transport.write(serial, endpoint, value);
 
     if (status == 0) {
+      if (attempt > 0) {
+        retry_count += attempt;
+      }
       return 0;
     }
 
     last_error = status;
+    TransportError err = errno_to_transport_error(status);
 
-    if (status == -ENODEV || status == -EPERM || status == -EINVAL) {
+    if (is_fatal(err)) {
       break;
     }
 
-    if (attempt < max_attempts - 1) {
+    if (is_retryable(err) && attempt < max_attempts - 1) {
       std::this_thread::sleep_for(retry_delay);
+    } else {
+      break;
     }
   }
 
@@ -315,7 +332,8 @@ CallbackReturn ODriveHardwareInterface::initialize_transport()
       axis_endpoint(odrive::AXIS__MOTOR__CONFIG__TORQUE_CONSTANT, joint_context.axis),
       torque_constant,
       runtime_config_.usb_read_retries,
-      std::chrono::milliseconds(runtime_config_.usb_retry_delay_ms));
+      std::chrono::milliseconds(runtime_config_.usb_retry_delay_ms),
+      cycle_stats_.usb_read_retries_total);
     if (read_status != 0) {
       return to_callback_return(read_status, "reading motor torque constant");
     }
@@ -328,7 +346,8 @@ CallbackReturn ODriveHardwareInterface::initialize_transport()
         axis_endpoint(odrive::AXIS__CONFIG__WATCHDOG_TIMEOUT, joint_context.axis),
         static_cast<float>(joint_config.watchdog_timeout),
         runtime_config_.usb_write_retries,
-        std::chrono::milliseconds(runtime_config_.usb_retry_delay_ms));
+        std::chrono::milliseconds(runtime_config_.usb_retry_delay_ms),
+        cycle_stats_.usb_write_retries_total);
       if (write_timeout_status != 0) {
         return to_callback_return(write_timeout_status, "configuring watchdog timeout");
       }
@@ -340,7 +359,8 @@ CallbackReturn ODriveHardwareInterface::initialize_transport()
       axis_endpoint(odrive::AXIS__CONFIG__ENABLE_WATCHDOG, joint_context.axis),
       static_cast<bool>(joint_context.enable_watchdog),
       runtime_config_.usb_write_retries,
-      std::chrono::milliseconds(runtime_config_.usb_retry_delay_ms));
+      std::chrono::milliseconds(runtime_config_.usb_retry_delay_ms),
+      cycle_stats_.usb_write_retries_total);
     if (write_enable_status != 0) {
       return to_callback_return(write_enable_status, "enabling watchdog");
     }
@@ -430,6 +450,7 @@ CallbackReturn ODriveHardwareInterface::configure_from_info(
 
   safety_config_ = SafetyConfig{};
   runtime_config_ = RuntimeConfig{};
+  cycle_stats_ = CycleStats{};
 
   {
     auto params = info_.hardware_parameters;
@@ -437,42 +458,26 @@ CallbackReturn ODriveHardwareInterface::configure_from_info(
     // Parse runtime configuration parameters
     auto usb_timeout_it = params.find("usb_timeout_ms");
     if (usb_timeout_it != params.end()) {
-      try {
-        unsigned int parsed = std::stoul(usb_timeout_it->second);
-        if (parsed > 0 && parsed <= 10000) {
-          runtime_config_.usb_timeout_ms = parsed;
-        } else {
-          RCUTILS_LOG_WARN_NAMED(
-            kLoggerName,
-            "usb_timeout_ms value %u out of range [1, 10000]; keeping default %u",
-            parsed, runtime_config_.usb_timeout_ms);
-        }
-      } catch (const std::exception &) {
-        RCUTILS_LOG_WARN_NAMED(
-          kLoggerName,
-          "Invalid usb_timeout_ms value '%s'; keeping default %u",
-          usb_timeout_it->second.c_str(), runtime_config_.usb_timeout_ms);
-      }
+      ConfigValidator::parse_unsigned_int(
+        kLoggerName,
+        "usb_timeout_ms",
+        usb_timeout_it->second,
+        config_limits::MIN_USB_TIMEOUT_MS,
+        config_limits::MAX_USB_TIMEOUT_MS,
+        config_limits::DEFAULT_USB_TIMEOUT_MS,
+        runtime_config_.usb_timeout_ms);
     }
 
     auto log_throttle_it = params.find("log_throttle_ms");
     if (log_throttle_it != params.end()) {
-      try {
-        unsigned int parsed = std::stoul(log_throttle_it->second);
-        if (parsed >= 100 && parsed <= 60000) {
-          runtime_config_.log_throttle_ms = parsed;
-        } else {
-          RCUTILS_LOG_WARN_NAMED(
-            kLoggerName,
-            "log_throttle_ms value %u out of range [100, 60000]; keeping default %u",
-            parsed, runtime_config_.log_throttle_ms);
-        }
-      } catch (const std::exception &) {
-        RCUTILS_LOG_WARN_NAMED(
-          kLoggerName,
-          "Invalid log_throttle_ms value '%s'; keeping default %u",
-          log_throttle_it->second.c_str(), runtime_config_.log_throttle_ms);
-      }
+      ConfigValidator::parse_unsigned_int(
+        kLoggerName,
+        "log_throttle_ms",
+        log_throttle_it->second,
+        config_limits::MIN_LOG_THROTTLE_MS,
+        config_limits::MAX_LOG_THROTTLE_MS,
+        config_limits::DEFAULT_LOG_THROTTLE_MS,
+        runtime_config_.log_throttle_ms);
     }
 
     auto bool_it = params.find("gate_outputs_with_lifecycle");
@@ -744,6 +749,17 @@ std::vector<hardware_interface::StateInterface> ODriveHardwareInterface::export_
     state_interfaces.emplace_back(
       hardware_interface::StateInterface(
         info_.joints[i].name, "healthy", &joints_[i].healthy));
+
+    // Rate limiter state interfaces
+    state_interfaces.emplace_back(
+      hardware_interface::StateInterface(
+        info_.joints[i].name, "position_rate_limited", &joints_[i].position_rate_limited));
+    state_interfaces.emplace_back(
+      hardware_interface::StateInterface(
+        info_.joints[i].name, "velocity_rate_limited", &joints_[i].velocity_rate_limited));
+    state_interfaces.emplace_back(
+      hardware_interface::StateInterface(
+        info_.joints[i].name, "effort_rate_limited", &joints_[i].effort_rate_limited));
   }
 
   return state_interfaces;
@@ -1033,6 +1049,11 @@ void ODriveHardwareInterface::populate_joint_diagnostics(
   assess_temperature("temperature.fet_c", joint.fet_temperature);
   assess_temperature("temperature.motor_c", joint.motor_temperature);
 
+  // Add rate limiter diagnostics
+  status.add("rate_limit.position", joint.position_rate_limited > 0.5 ? "active" : "inactive");
+  status.add("rate_limit.velocity", joint.velocity_rate_limited > 0.5 ? "active" : "inactive");
+  status.add("rate_limit.effort", joint.effort_rate_limited > 0.5 ? "active" : "inactive");
+
   const auto summary_text = join_messages(messages);
   if (fault_detected) {
     status.summary(
@@ -1110,6 +1131,18 @@ void ODriveHardwareInterface::populate_drive_diagnostics(
     warning_detected = true;
     messages.emplace_back("axis fault(s)");
   }
+
+  // Add performance statistics
+  status.add("stats.read_cycles", static_cast<int>(cycle_stats_.read_cycles));
+  status.add("stats.write_cycles", static_cast<int>(cycle_stats_.write_cycles));
+  status.add("stats.read_deadline_misses", static_cast<int>(cycle_stats_.read_deadline_misses));
+  status.add("stats.write_deadline_misses", static_cast<int>(cycle_stats_.write_deadline_misses));
+  status.addf("stats.max_read_time_ms", "%.3f", cycle_stats_.max_read_cycle_time_sec * 1000.0);
+  status.addf("stats.max_write_time_ms", "%.3f", cycle_stats_.max_write_cycle_time_sec * 1000.0);
+  status.add("stats.usb_read_retries", static_cast<int>(cycle_stats_.usb_read_retries_total));
+  status.add("stats.usb_write_retries", static_cast<int>(cycle_stats_.usb_write_retries_total));
+  status.add("stats.validation_failures", static_cast<int>(cycle_stats_.command_validation_failures));
+  status.add("stats.rate_limit_events", static_cast<int>(cycle_stats_.rate_limit_events));
 
   const auto summary_text = join_messages(messages);
   if (fault_detected) {
@@ -1386,16 +1419,25 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
 
   maybe_update_diagnostics();
 
-  // Deadline monitoring
+  // Cycle statistics and deadline monitoring
+  ++cycle_stats_.read_cycles;
+  auto cycle_duration = std::chrono::steady_clock::now() - start_time;
+  auto duration_sec = std::chrono::duration<double>(cycle_duration).count();
+
+  if (duration_sec > cycle_stats_.max_read_cycle_time_sec) {
+    cycle_stats_.max_read_cycle_time_sec = duration_sec;
+  }
+
   if (runtime_config_.enable_deadline_warnings) {
-    auto duration = std::chrono::steady_clock::now() - start_time;
-    auto duration_sec = std::chrono::duration<double>(duration).count();
     if (duration_sec > runtime_config_.max_read_cycle_time_sec) {
+      ++cycle_stats_.read_deadline_misses;
       RCUTILS_LOG_WARN_THROTTLE(
         RCUTILS_STEADY_TIME, runtime_config_.log_throttle_ms, kLoggerName,
-        "read() cycle time %.3fms exceeded limit %.3fms",
+        "read() cycle time %.3fms exceeded limit %.3fms (miss %zu of %zu cycles)",
         duration_sec * 1000.0,
-        runtime_config_.max_read_cycle_time_sec * 1000.0);
+        runtime_config_.max_read_cycle_time_sec * 1000.0,
+        cycle_stats_.read_deadline_misses,
+        cycle_stats_.read_cycles);
     }
   }
 
@@ -1458,6 +1500,11 @@ return_type ODriveHardwareInterface::write(
     std::ostringstream rate_limit_msg;
     bool was_rate_limited = false;
 
+    // Reset rate limiter state flags
+    joints_[i].position_rate_limited = 0.0;
+    joints_[i].velocity_rate_limited = 0.0;
+    joints_[i].effort_rate_limited = 0.0;
+
     if (joints_[i].control_level == AxisControlLevel::POSITION) {
       if (!apply_rate_limiting(
           "Position",
@@ -1468,6 +1515,8 @@ return_type ODriveHardwareInterface::write(
           rate_limit_msg))
       {
         was_rate_limited = true;
+        joints_[i].position_rate_limited = 1.0;
+        ++cycle_stats_.rate_limit_events;
       }
     }
 
@@ -1483,6 +1532,8 @@ return_type ODriveHardwareInterface::write(
           rate_limit_msg))
       {
         was_rate_limited = true;
+        joints_[i].velocity_rate_limited = 1.0;
+        ++cycle_stats_.rate_limit_events;
       }
     }
 
@@ -1495,6 +1546,8 @@ return_type ODriveHardwareInterface::write(
         rate_limit_msg))
     {
       was_rate_limited = true;
+      joints_[i].effort_rate_limited = 1.0;
+      ++cycle_stats_.rate_limit_events;
     }
 
     if (was_rate_limited) {
@@ -1510,6 +1563,7 @@ return_type ODriveHardwareInterface::write(
       joints_[i].command_limits, joints_[i].control_level, command_state, validation_error);
 
     if (!command_valid && joints_[i].control_level != AxisControlLevel::UNDEFINED) {
+      ++cycle_stats_.command_validation_failures;
       RCUTILS_LOG_ERROR_NAMED(
         kLoggerName,
         "Rejected command for joint '%s': %s (falling back to zero torque)",
@@ -1627,16 +1681,25 @@ return_type ODriveHardwareInterface::write(
     joints_[i].last_command_effort = command_state.command_effort;
   }
 
-  // Deadline monitoring
+  // Cycle statistics and deadline monitoring
+  ++cycle_stats_.write_cycles;
+  auto cycle_duration = std::chrono::steady_clock::now() - start_time;
+  auto duration_sec = std::chrono::duration<double>(cycle_duration).count();
+
+  if (duration_sec > cycle_stats_.max_write_cycle_time_sec) {
+    cycle_stats_.max_write_cycle_time_sec = duration_sec;
+  }
+
   if (runtime_config_.enable_deadline_warnings) {
-    auto duration = std::chrono::steady_clock::now() - start_time;
-    auto duration_sec = std::chrono::duration<double>(duration).count();
     if (duration_sec > runtime_config_.max_write_cycle_time_sec) {
+      ++cycle_stats_.write_deadline_misses;
       RCUTILS_LOG_WARN_THROTTLE(
         RCUTILS_STEADY_TIME, runtime_config_.log_throttle_ms, kLoggerName,
-        "write() cycle time %.3fms exceeded limit %.3fms",
+        "write() cycle time %.3fms exceeded limit %.3fms (miss %zu of %zu cycles)",
         duration_sec * 1000.0,
-        runtime_config_.max_write_cycle_time_sec * 1000.0);
+        runtime_config_.max_write_cycle_time_sec * 1000.0,
+        cycle_stats_.write_deadline_misses,
+        cycle_stats_.write_cycles);
     }
   }
 

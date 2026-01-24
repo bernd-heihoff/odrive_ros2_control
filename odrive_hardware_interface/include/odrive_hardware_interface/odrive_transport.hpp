@@ -22,6 +22,16 @@
 
 namespace odrive_hardware_interface
 {
+/// Abstract interface for ODrive USB communication.
+///
+/// This interface abstracts the low-level USB protocol used by ODrive controllers,
+/// allowing for dependency injection and testing with mock transports.
+///
+/// Thread Safety: Implementations should be thread-safe for concurrent read/write
+/// operations from the same or different threads.
+///
+/// Error Handling: All methods return 0 on success, negative error codes on failure.
+/// Error codes typically match errno values (e.g., -ENODEV, -ETIMEDOUT).
 class ODRIVE_HARDWARE_INTERFACE_PUBLIC ODriveTransport
 {
 public:
@@ -29,20 +39,52 @@ public:
 
   virtual ~ODriveTransport() = default;
 
+  /// Initialize transport and discover ODrive devices.
+  ///
+  /// @param serial_numbers Matrix of serial numbers organized by bus/device hierarchy.
+  ///                       Typically a 2D vector where each row represents devices on a bus.
+  /// @return 0 on success, negative error code on failure
   virtual int initialize(const SerialMatrix & serial_numbers) = 0;
 
+  /// Read a value from an ODrive endpoint.
+  ///
+  /// Template method that reads sizeof(T) bytes from the specified endpoint
+  /// and interprets them as type T.
+  ///
+  /// @tparam T Value type (must match endpoint's data type)
+  /// @param serial_number ODrive serial number in decimal format
+  /// @param endpoint_id Endpoint ID from odrive_endpoints.hpp
+  /// @param[out] value Read value on success
+  /// @return 0 on success, negative error code on failure
   template<typename T>
   int read(std::int64_t serial_number, std::int16_t endpoint_id, T & value)
   {
     return read_impl(serial_number, endpoint_id, &value, sizeof(T));
   }
 
+  /// Write a value to an ODrive endpoint.
+  ///
+  /// Template method that writes sizeof(T) bytes to the specified endpoint.
+  ///
+  /// @tparam T Value type (must match endpoint's data type)
+  /// @param serial_number ODrive serial number in decimal format
+  /// @param endpoint_id Endpoint ID from odrive_endpoints.hpp
+  /// @param value Value to write
+  /// @return 0 on success, negative error code on failure
   template<typename T>
   int write(std::int64_t serial_number, std::int16_t endpoint_id, const T & value)
   {
     return write_impl(serial_number, endpoint_id, &value, sizeof(T));
   }
 
+  /// Call a void endpoint (function with no return value).
+  ///
+  /// Used for endpoints that trigger actions without returning data,
+  /// such as AXIS__WATCHDOG_FEED or AXIS__CLEAR_ERRORS.
+  ///
+  /// @param serial_number ODrive serial number in decimal format
+  /// @param endpoint_id Endpoint ID from odrive_endpoints.hpp
+  /// @return 0 on success, negative error code on failure
   virtual int call(std::int64_t serial_number, std::int16_t endpoint_id) = 0;
 
 protected:
