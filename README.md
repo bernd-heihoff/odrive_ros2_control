@@ -29,6 +29,7 @@ This repository is maintained for the Wackerbot platform and regularly rebased o
 - Command-limit validation to guard against NAN / out-of-range set points before they reach the drive.
 - Example URDF and launch files that plug directly into `ros2_control` demo controllers.
 - Extensive unit tests that exercise configuration parsing, safety checks, telemetry conversion, and error monitoring helpers.
+- **Fixed timeout strategy** for deterministic real-time control loop performance (see Configuration section).
 
 ## Requirements
 
@@ -75,6 +76,19 @@ ros2 launch odrive_demo_bringup odrive_multi_interface.launch.py
 ```
 
 Each launch file loads the URDF from `odrive_demo_description`, starts the `controller_manager`, and spawns the configured controllers. Swap in your own robot description or controller YAML to match the hardware you intend to drive.
+
+## Timeout Configuration
+
+All communication timeouts are **intentionally fixed** (not adaptive) to maintain deterministic real-time behavior:
+
+- `usb_timeout_ms` (default: 100ms) - Maximum time to wait for a single USB operation
+- `usb_read_retries` (default: 3) - Number of retry attempts for transient read errors
+- `usb_write_retries` (default: 3) - Number of retry attempts for transient write errors  
+- `usb_retry_delay_ms` (default: 5ms) - Fixed delay between retry attempts
+
+**Design Rationale**: Fixed timeouts ensure the control loop has predictable worst-case execution time. If USB communication fails consistently, the system faults fast and surfaces the issue (bad cables, EMI, permissions) rather than hiding it with progressively longer retry periods. This is critical for safety-critical applications where deterministic timing matters more than trying to "work around" flaky hardware.
+
+For harsh electromagnetic environments, you may increase `usb_read_retries` and `usb_write_retries`, but keep `usb_timeout_ms` and `usb_retry_delay_ms` fixed to maintain timing predictability.
 
 ## Hardware configuration
 

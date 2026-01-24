@@ -139,6 +139,9 @@ return_type to_io_return(int status, const std::string & action)
 }
 
 // Retry wrapper for USB operations
+// NOTE: Uses FIXED retry count and delay for deterministic real-time behavior.
+// Do not make this adaptive - the control loop needs predictable worst-case timing.
+// If retries are exhausted, the error surfaces immediately for proper fault handling.
 template<typename T>
 int read_with_retry(
   ODriveTransport & transport,

@@ -123,11 +123,18 @@ private:
 
   struct RuntimeConfig
   {
+    // TIMEOUT DESIGN RATIONALE:
+    // All timeouts are FIXED (not adaptive) to maintain deterministic real-time behavior.
+    // In a control loop, we need predictable worst-case execution time. Adaptive timeouts
+    // would hide problems (bad cables, EMI) and make debugging harder. If communication
+    // fails consistently, the system should fault fast and surface the issue rather than
+    // progressively degrading performance with longer retry periods.
+
     // USB communication timeout in milliseconds
     unsigned int usb_timeout_ms{100};
     // Throttle interval for repeated log messages in milliseconds
     unsigned int log_throttle_ms{2000};
-    // Retry logic for transient USB errors
+    // Retry logic for transient USB errors (fixed retry count for deterministic timing)
     unsigned int usb_read_retries{3};
     unsigned int usb_write_retries{3};
     unsigned int usb_retry_delay_ms{5};
