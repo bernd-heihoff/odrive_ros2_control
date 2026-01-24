@@ -22,6 +22,29 @@ namespace odrive_hardware_interface
 
 /// Type-safe error codes for ODrive transport operations.
 /// Replaces raw errno codes with explicit, documented error types.
+///
+/// ERROR CODE REFERENCE:
+/// ┌──────────────────────────┬────────┬──────────────┬────────────────┐
+/// │ Error Type               │ Code   │ Retryable    │ Fatal          │
+/// ├──────────────────────────┼────────┼──────────────┼────────────────┤
+/// │ OK                       │ 0      │ N/A          │ No             │
+/// │ DEVICE_NOT_FOUND         │ -19    │ No           │ Yes            │
+/// │ PERMISSION_DENIED        │ -1     │ No           │ Yes            │
+/// │ INVALID_PARAMETER        │ -22    │ No           │ Yes            │
+/// │ TIMEOUT                  │ -110   │ Yes          │ No             │
+/// │ BUSY                     │ -16    │ Yes          │ No             │
+/// │ IO_ERROR                 │ -5     │ Yes          │ No             │
+/// │ PROTOCOL_ERROR           │ -71    │ No           │ No             │
+/// │ ENDPOINT_NOT_SUPPORTED   │ -95    │ No           │ No             │
+/// │ UNKNOWN                  │ -999   │ No           │ No             │
+/// └──────────────────────────┴────────┴──────────────┴────────────────┘
+///
+/// TROUBLESHOOTING:
+/// - DEVICE_NOT_FOUND (-19): Check USB cable, run 'lsusb' to verify device
+/// - PERMISSION_DENIED (-1): Add udev rules, add user to 'dialout' group
+/// - TIMEOUT (-110): Reduce usb_timeout_ms or check for EMI/cable quality
+/// - BUSY (-16): Device in use by another process (check for odrivetool)
+/// - IO_ERROR (-5): Intermittent USB issue, cable problem, or power glitch
 enum class TransportError : int
 {
   /// Operation completed successfully

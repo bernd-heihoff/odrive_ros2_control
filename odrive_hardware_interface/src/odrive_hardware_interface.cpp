@@ -324,7 +324,7 @@ CallbackReturn ODriveHardwareInterface::initialize_transport()
     return to_callback_return(init_status, "initialising ODrive transport");
   }
 
-  for (size_t i = 0; i < joints_.size(); i++) {
+  for (std::size_t i = 0; i < joints_.size(); i++) {
     auto & joint_context = joints_[i];
     const auto & joint_config = hardware_config_.joints[i];
 
@@ -536,14 +536,13 @@ CallbackReturn ODriveHardwareInterface::configure_from_info(
     if (period_it != params.end()) {
       double parsed_period = diagnostics_config_.period_sec;
       if (try_parse_double(period_it->second, parsed_period) && parsed_period > 0.0) {
-        constexpr double MIN_DIAGNOSTICS_PERIOD_SEC = 0.1;  // 100ms minimum
-        if (parsed_period < MIN_DIAGNOSTICS_PERIOD_SEC) {
+        if (parsed_period < config_limits::MIN_DIAGNOSTIC_PERIOD_SEC) {
           RCUTILS_LOG_WARN_NAMED(
             kLoggerName,
             "Diagnostics period %.3fs is below minimum %.3fs; "
             "clamping to minimum to protect real-time performance",
-            parsed_period, MIN_DIAGNOSTICS_PERIOD_SEC);
-          diagnostics_config_.period_sec = MIN_DIAGNOSTICS_PERIOD_SEC;
+            parsed_period, config_limits::MIN_DIAGNOSTIC_PERIOD_SEC);
+          diagnostics_config_.period_sec = config_limits::MIN_DIAGNOSTIC_PERIOD_SEC;
         } else {
           diagnostics_config_.period_sec = parsed_period;
         }
@@ -619,7 +618,7 @@ CallbackReturn ODriveHardwareInterface::on_activate(const rclcpp_lifecycle::Stat
     "Activating ODrive hardware: %zu joints, %zu sensors, %zu drives",
     joints_.size(), sensors_.size(), drives_.size());
 
-  for (size_t i = 0; i < joints_.size() && i < hardware_config_.joints.size(); ++i) {
+  for (std::size_t i = 0; i < joints_.size() && i < hardware_config_.joints.size(); ++i) {
     RCUTILS_LOG_INFO_NAMED(
       kLoggerName,
       "  Joint[%zu] '%s': serial=0x%012" PRIX64 " axis=%d watchdog=%s timeout=%.3fs",
@@ -705,7 +704,7 @@ CallbackReturn ODriveHardwareInterface::recover()
 std::vector<hardware_interface::StateInterface> ODriveHardwareInterface::export_state_interfaces()
 {
   std::vector<hardware_interface::StateInterface> state_interfaces;
-  for (size_t i = 0; i < info_.sensors.size(); i++) {
+  for (std::size_t i = 0; i < info_.sensors.size(); i++) {
     state_interfaces.emplace_back(
       hardware_interface::StateInterface(
         info_.sensors[i].name, "vbus_voltage", &sensors_[i].vbus_voltage));
@@ -715,7 +714,7 @@ std::vector<hardware_interface::StateInterface> ODriveHardwareInterface::export_
         info_.sensors[i].name, "transport_error", &sensors_[i].transport_error));
   }
 
-  for (size_t i = 0; i < info_.joints.size(); i++) {
+  for (std::size_t i = 0; i < info_.joints.size(); i++) {
     state_interfaces.emplace_back(
       hardware_interface::StateInterface(
         info_.joints[i].name, hardware_interface::HW_IF_EFFORT, &joints_[i].effort));
@@ -776,7 +775,7 @@ std::vector<hardware_interface::CommandInterface>
 ODriveHardwareInterface::export_command_interfaces()
 {
   std::vector<hardware_interface::CommandInterface> command_interfaces;
-  for (size_t i = 0; i < info_.joints.size(); i++) {
+  for (std::size_t i = 0; i < info_.joints.size(); i++) {
     command_interfaces.emplace_back(
       hardware_interface::CommandInterface(
         info_.joints[i].name, hardware_interface::HW_IF_EFFORT, &joints_[i].command_effort));
@@ -864,7 +863,7 @@ return_type ODriveHardwareInterface::prepare_command_mode_switch(
 return_type ODriveHardwareInterface::perform_command_mode_switch(
   const std::vector<std::string> &, const std::vector<std::string> &)
 {
-  for (size_t i = 0; i < info_.joints.size(); i++) {
+  for (std::size_t i = 0; i < info_.joints.size(); i++) {
     const bool has_fault = safety_config_.mask_faulted_axes &&
       (extract_error_value(joints_[i].axis_error).has_value() ||
       extract_error_value(joints_[i].motor_error).has_value() ||
@@ -1304,7 +1303,7 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
       std::string action = failing_stage.empty() ? "reading axis telemetry" :
         "reading axis telemetry (" + failing_stage + ")";
       RCUTILS_LOG_WARN_THROTTLE(
-        RCUTILS_STEADY_TIME, 2000, kLoggerName,
+        RCUTILS_STEADY_TIME, config_limits::DEFAULT_LOG_THROTTLE_MS, kLoggerName,
         "Transport error (%d) %s for joint[%zu]='%s' (serial 0x%016" PRIx64 " axis %d); "
         "continuing. Last known: pos=%.3f vel=%.3f eff=%.3f",
         status,
@@ -1671,7 +1670,7 @@ return_type ODriveHardwareInterface::write(
 
       joints_[i].write_error = static_cast<double>(status);
       RCUTILS_LOG_WARN_THROTTLE(
-        RCUTILS_STEADY_TIME, 2000, kLoggerName,
+        RCUTILS_STEADY_TIME, config_limits::DEFAULT_LOG_THROTTLE_MS, kLoggerName,
         "Transport error (%d) %s for joint[%zu]='%s' (serial 0x%016" PRIx64 " axis %d); "
         "continuing. Command: pos=%.3f vel=%.3f eff=%.3f level=%d",
         status,
