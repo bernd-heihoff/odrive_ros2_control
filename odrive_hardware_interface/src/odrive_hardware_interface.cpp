@@ -1302,7 +1302,7 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
       joints_[i].healthy = 0.0;
       std::string action = failing_stage.empty() ? "reading axis telemetry" :
         "reading axis telemetry (" + failing_stage + ")";
-      RCUTILS_LOG_WARN_THROTTLE(
+      RCUTILS_LOG_WARN_THROTTLE_NAMED(
         RCUTILS_STEADY_TIME, config_limits::DEFAULT_LOG_THROTTLE_MS, kLoggerName,
         "Transport error (%d) %s for joint[%zu]='%s' (serial 0x%016" PRIx64 " axis %d); "
         "continuing. Last known: pos=%.3f vel=%.3f eff=%.3f",
@@ -1362,7 +1362,7 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
       joints_[i].read_error = -1.0;  // Validation error
       joints_[i].telemetry_valid = 0.0;
       joints_[i].healthy = 0.0;
-      RCUTILS_LOG_WARN_THROTTLE(
+      RCUTILS_LOG_WARN_THROTTLE_NAMED(
         RCUTILS_STEADY_TIME, runtime_config_.log_throttle_ms, kLoggerName,
         "Feedback validation failed for joint[%zu]='%s': %s. "
         "Keeping last valid state: pos=%.3f vel=%.3f eff=%.3f",
@@ -1439,7 +1439,7 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
   if (runtime_config_.enable_deadline_warnings) {
     if (duration_sec > runtime_config_.max_read_cycle_time_sec) {
       ++cycle_stats_.read_deadline_misses;
-      RCUTILS_LOG_WARN_THROTTLE(
+      RCUTILS_LOG_WARN_THROTTLE_NAMED(
         RCUTILS_STEADY_TIME, runtime_config_.log_throttle_ms, kLoggerName,
         "read() cycle time %.3fms exceeded limit %.3fms (miss %zu of %zu cycles)",
         duration_sec * 1000.0,
@@ -1559,7 +1559,7 @@ return_type ODriveHardwareInterface::write(
     }
 
     if (was_rate_limited) {
-      RCUTILS_LOG_WARN_THROTTLE(
+      RCUTILS_LOG_WARN_THROTTLE_NAMED(
         RCUTILS_STEADY_TIME, runtime_config_.log_throttle_ms, kLoggerName,
         "Rate limited joint '%s': %s",
         info_.joints[i].name.c_str(),
@@ -1669,7 +1669,7 @@ return_type ODriveHardwareInterface::write(
         "writing axis command (" + failing_stage + ")";
 
       joints_[i].write_error = static_cast<double>(status);
-      RCUTILS_LOG_WARN_THROTTLE(
+      RCUTILS_LOG_WARN_THROTTLE_NAMED(
         RCUTILS_STEADY_TIME, config_limits::DEFAULT_LOG_THROTTLE_MS, kLoggerName,
         "Transport error (%d) %s for joint[%zu]='%s' (serial 0x%016" PRIx64 " axis %d); "
         "continuing. Command: pos=%.3f vel=%.3f eff=%.3f level=%d",
@@ -1701,7 +1701,7 @@ return_type ODriveHardwareInterface::write(
   if (runtime_config_.enable_deadline_warnings) {
     if (duration_sec > runtime_config_.max_write_cycle_time_sec) {
       ++cycle_stats_.write_deadline_misses;
-      RCUTILS_LOG_WARN_THROTTLE(
+      RCUTILS_LOG_WARN_THROTTLE_NAMED(
         RCUTILS_STEADY_TIME, runtime_config_.log_throttle_ms, kLoggerName,
         "write() cycle time %.3fms exceeded limit %.3fms (miss %zu of %zu cycles)",
         duration_sec * 1000.0,

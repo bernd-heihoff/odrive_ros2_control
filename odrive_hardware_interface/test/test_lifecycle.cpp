@@ -335,8 +335,6 @@ TEST_F(LifecycleTest, OnActivateConnectsToHardwareAndCanFail)
   // without crashing the node.
   TestHardwareInterface interface;
   interface.set_diagnostics_factory(make_fake_diagnostics_factory());
-
-  const std::int64_t serial = 0x00000000000000FELL;
   MockTransport * transport = nullptr;
 
   interface.set_transport_factory(
