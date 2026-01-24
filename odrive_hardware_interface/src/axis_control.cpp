@@ -213,6 +213,11 @@ int write_axis_command(
   bool enable_watchdog,
   std::string & failing_stage)
 {
+  // WATCHDOG SAFETY DESIGN:
+  // Feeds occur at the end of successful command writes. This couples watchdog
+  // health to active control - if the controller stops commanding, the watchdog
+  // expires and halts the motor. This is safer than feeding based on connection
+  // health alone, which could allow runaway motors if the control loop hangs.
   const auto write_axis_value = [&](const char * stage, std::int16_t endpoint, auto value) -> int {
       failing_stage = stage;
       if (const int status = transport.write(

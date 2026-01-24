@@ -109,7 +109,7 @@ Key parameters per joint:
 | `serial_number` | hex / integer | ✅ | Serial of the ODrive that hosts the axis (hex strings are accepted and parsed case-insensitively). |
 | `axis` | integer (0 or 1) | ✅ | Axis index on the selected ODrive. |
 | `enable_watchdog` | bool | ✅ | Enables drive watchdog feeding during command streaming; set to `false` for development rigs without watchdog. |
-| `watchdog_timeout` | seconds (double) | ✅ | Timeout programmed into the drive when `enable_watchdog` is true. |
+| `watchdog_timeout` | seconds (double) | ✅ | Timeout programmed into the drive when `enable_watchdog` is true. **Important:** The watchdog is fed only during active command writes, not during read cycles. This ensures the watchdog detects control loop failures (not just connection issues). Set this conservatively above your worst-case control loop period (typically 3-10x your nominal rate). Recommended minimum: 0.05s for 100Hz control, 0.1s for 50Hz or slower. |
 | `command_*_min/max` | double | optional | Optional safety limits for position (rad), velocity (rad/s), and effort (Nm); the interface rejects commands that violate these limits. |
 
 Add a `<sensor>` entry per unique ODrive you monitor for bus voltage. When multiple ODrives share the same serial, include one `<sensor>` and multiple `<joint>` entries pointing to the same serial with different axes.

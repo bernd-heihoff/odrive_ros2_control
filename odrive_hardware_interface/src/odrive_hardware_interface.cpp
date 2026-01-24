@@ -1365,6 +1365,10 @@ return_type ODriveHardwareInterface::write(const rclcpp::Time & time, const rclc
       idle_requested_on_fault_[i] = false;
     }
 
+    // Write commands and feed watchdog (if enabled).
+    // Note: Watchdog feed is intentionally tied to command writes to detect
+    // control loop failures. If commands stop (lifecycle gating, fault masking),
+    // the watchdog will expire and safely halt the motor.
     std::string failing_stage;
     if (const int status = write_axis_command(
         *transport_, joints_[i].serial_number, joints_[i].axis, joints_[i].control_level,

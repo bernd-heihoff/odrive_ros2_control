@@ -54,6 +54,13 @@ int perform_axis_mode_switch(
   std::string & failing_stage);
 
 /// Write the latest command setpoints for the current mode.
+/// When enable_watchdog is true, feeds the watchdog after sending commands.
+/// 
+/// IMPORTANT: Watchdog feeds happen ONLY during successful command writes.
+/// This ensures the watchdog detects control loop failures, not just
+/// communication issues. If your controller stops commanding (e.g., lifecycle
+/// state change, fault masking), the watchdog will expire as intended.
+/// 
 /// Returns 0 on success.
 int write_axis_command(
   ODriveTransport & transport,

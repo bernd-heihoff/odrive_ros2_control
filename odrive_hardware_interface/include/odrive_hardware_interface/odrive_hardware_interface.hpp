@@ -168,6 +168,14 @@ private:
     std::int64_t serial_number{0};
     int axis{0};
     float torque_constant{std::numeric_limits<float>::quiet_NaN()};
+    
+    // WATCHDOG SAFETY DESIGN:
+    // Watchdog feeds occur ONLY during write() when commands are actively sent.
+    // This is intentional: the watchdog should detect control loop failures,
+    // not just communication failures. If the controller stops commanding
+    // (lifecycle gating, faulted axis masking, etc.), the watchdog SHOULD expire
+    // to safely halt the motor. Set watchdog_timeout conservatively above your
+    // worst-case control loop period.
     bool enable_watchdog{false};
 
     double command_position{std::numeric_limits<double>::quiet_NaN()};
