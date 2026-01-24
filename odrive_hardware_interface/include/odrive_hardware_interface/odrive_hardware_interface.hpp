@@ -23,6 +23,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <shared_mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -237,7 +238,8 @@ private:
 
   SafetyConfig safety_config_;
   RuntimeConfig runtime_config_;
-  bool outputs_enabled_{false};
+  // Atomic flag for lock-free lifecycle state checks in write path
+  std::atomic<bool> outputs_enabled_{false};
 
   // Runtime tracking for axis fault masking.
   std::vector<bool> axis_faulted_;
@@ -255,9 +257,16 @@ private:
   DiagnosticsInterface::Duration diagnostics_period_{DiagnosticsInterface::Duration::zero()};
   std::optional<DiagnosticsInterface::TimePoint> last_diagnostics_update_;
 
-  // Thread safety: protects concurrent access to sensors_, drives_, and joints_
-  // from read(), write(), and diagnostics callbacks
-  mutable std::mutex state_mutex_;
+  // LOCKING STRATEGY:
+  // - state_mutex_: Primary shared mutex using reader-writer semantics
+  //   * read() and diagnostics use shared locks (concurrent reads allowed)
+  //   * write() uses exclusive lock (blocks all other access)
+  // - Per-context fine-grained locks would further reduce contention, but add
+  //   complexity. Current design prioritizes correctness and simplicity.
+  // - outputs_enabled_ is atomic for lock-free lifecycle state checks
+  //
+  // Lock ordering (when multiple locks needed): state_mutex_ must be acquired first
+  mutable std::shared_mutex state_mutex_;
 
   std::vector<SensorContext> sensors_;
   std::vector<DriveContext> drives_;

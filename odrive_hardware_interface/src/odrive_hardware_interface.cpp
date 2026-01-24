@@ -629,7 +629,9 @@ CallbackReturn ODriveHardwareInterface::on_activate(const rclcpp_lifecycle::Stat
   }
 
   if (safety_config_.gate_outputs_with_lifecycle) {
-    outputs_enabled_ = true;
+    // Atomic store with release semantics ensures all prior initialization is visible
+    // to threads that read outputs_enabled_ with acquire semantics
+    outputs_enabled_.store(true, std::memory_order_release);
   }
 
   std::fill(axis_faulted_.begin(), axis_faulted_.end(), false);
@@ -656,7 +658,9 @@ CallbackReturn ODriveHardwareInterface::on_activate(const rclcpp_lifecycle::Stat
 CallbackReturn ODriveHardwareInterface::on_deactivate(const rclcpp_lifecycle::State &)
 {
   if (safety_config_.gate_outputs_with_lifecycle) {
-    outputs_enabled_ = false;
+    // Atomic store with release semantics ensures deactivation is visible
+    // to write() thread before it checks the flag
+    outputs_enabled_.store(false, std::memory_order_release);
   }
 
   constexpr std::int32_t requested_state = kAxisStateIdle;
@@ -939,7 +943,8 @@ void ODriveHardwareInterface::populate_joint_diagnostics(
   diagnostic_updater::DiagnosticStatusWrapper & status,
   std::size_t index) const
 {
-  std::lock_guard<std::mutex> lock(state_mutex_);
+  // Use shared lock - diagnostics read-only access allows concurrency with other readers
+  std::shared_lock<std::shared_mutex> lock(state_mutex_);
 
   const auto & joint_info = info_.joints[index];
   const auto & joint = joints_[index];
@@ -1046,7 +1051,8 @@ void ODriveHardwareInterface::populate_drive_diagnostics(
   diagnostic_updater::DiagnosticStatusWrapper & status,
   std::size_t index) const
 {
-  std::lock_guard<std::mutex> lock(state_mutex_);
+  // Use shared lock - diagnostics read-only access allows concurrency with other readers
+  std::shared_lock<std::shared_mutex> lock(state_mutex_);
 
   const auto & drive = drives_[index];
 
@@ -1123,7 +1129,8 @@ void ODriveHardwareInterface::populate_sensor_diagnostics(
   diagnostic_updater::DiagnosticStatusWrapper & status,
   std::size_t index) const
 {
-  std::lock_guard<std::mutex> lock(state_mutex_);
+  // Use shared lock - diagnostics read-only access allows concurrency with other readers
+  std::shared_lock<std::shared_mutex> lock(state_mutex_);
 
   const auto & sensor_info = info_.sensors[index];
   const auto & sensor = sensors_[index];
@@ -1163,7 +1170,9 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
 {
   auto start_time = std::chrono::steady_clock::now();
 
-  std::lock_guard<std::mutex> lock(state_mutex_);
+  // Use shared lock - read() only modifies state_, not command interfaces
+  // This allows diagnostics callbacks to run concurrently during read()
+  std::shared_lock<std::shared_mutex> lock(state_mutex_);
 
   // If transport lost (disconnected during operation), set all joints unhealthy and return.
   // Recovery requires deactivate+activate cycle.
@@ -1399,7 +1408,9 @@ return_type ODriveHardwareInterface::write(
 {
   auto start_time = std::chrono::steady_clock::now();
 
-  std::lock_guard<std::mutex> lock(state_mutex_);
+  // Use unique lock - write() modifies state and must have exclusive access
+  // This blocks all readers (diagnostics) and other writers during command transmission
+  std::unique_lock<std::shared_mutex> lock(state_mutex_);
   (void)time;
 
   // Calculate time delta for rate limiting
@@ -1417,7 +1428,9 @@ return_type ODriveHardwareInterface::write(
     return return_type::OK;
   }
 
-  const bool lifecycle_ok = !safety_config_.gate_outputs_with_lifecycle || outputs_enabled_;
+  // Lock-free atomic read of lifecycle state
+  const bool lifecycle_ok = !safety_config_.gate_outputs_with_lifecycle ||
+    outputs_enabled_.load(std::memory_order_acquire);
   if (!lifecycle_ok) {
     return return_type::OK;
   }
