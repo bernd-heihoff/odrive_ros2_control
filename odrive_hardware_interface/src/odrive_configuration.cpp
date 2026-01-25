@@ -178,7 +178,7 @@ bool parse_hardware_configuration(
 
     JointConfig joint_config;
     joint_config.name = joint.name;
-    
+
     // invert_axis is optional (defaults to false)
     joint_config.invert_axis = false;
     const auto invert_axis_it = joint.parameters.find("invert_axis");

@@ -422,7 +422,7 @@ CallbackReturn ODriveHardwareInterface::configure_from_info(
     joint.command_limits = joint_config.command_limits;
     joint.feedback_limits = joint_config.feedback_limits;
     joints_.emplace_back(joint);
-  }  
+  }
 
   drives_.clear();
   drives_.reserve(hardware_config_.joints.size());
@@ -1662,14 +1662,14 @@ return_type ODriveHardwareInterface::write(
     // Note: Watchdog feed is intentionally tied to command writes to detect
     // control loop failures. If commands stop (lifecycle gating, fault masking),
     // the watchdog will expire and safely halt the motor.
-    
+
     // Apply axis inversion if configured (for reversed motor wiring)
     if (joints_[i].invert_axis) {
       command_state.command_position *= -1.0;
       command_state.command_velocity *= -1.0;
       command_state.command_effort *= -1.0;
     }
-    
+
     std::string failing_stage;
     if (const int status = write_axis_command(
         *transport_, joints_[i].serial_number, joints_[i].axis, joints_[i].control_level,
