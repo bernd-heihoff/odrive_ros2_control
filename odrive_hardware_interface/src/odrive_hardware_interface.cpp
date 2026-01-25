@@ -484,6 +484,45 @@ CallbackReturn ODriveHardwareInterface::configure_from_info(
         runtime_config_.log_throttle_ms);
     }
 
+    auto max_read_it = params.find("max_read_cycle_time_sec");
+    if (max_read_it != params.end()) {
+      double parsed = runtime_config_.max_read_cycle_time_sec;
+      if (try_parse_double(max_read_it->second, parsed) && parsed > 0.0) {
+        runtime_config_.max_read_cycle_time_sec = parsed;
+      } else {
+        RCUTILS_LOG_WARN_NAMED(
+          kLoggerName,
+          "Invalid max_read_cycle_time_sec '%s'; keeping default",
+          max_read_it->second.c_str());
+      }
+    }
+
+    auto max_write_it = params.find("max_write_cycle_time_sec");
+    if (max_write_it != params.end()) {
+      double parsed = runtime_config_.max_write_cycle_time_sec;
+      if (try_parse_double(max_write_it->second, parsed) && parsed > 0.0) {
+        runtime_config_.max_write_cycle_time_sec = parsed;
+      } else {
+        RCUTILS_LOG_WARN_NAMED(
+          kLoggerName,
+          "Invalid max_write_cycle_time_sec '%s'; keeping default",
+          max_write_it->second.c_str());
+      }
+    }
+
+    auto deadline_warnings_it = params.find("enable_deadline_warnings");
+    if (deadline_warnings_it != params.end()) {
+      bool parsed = runtime_config_.enable_deadline_warnings;
+      if (try_parse_bool(deadline_warnings_it->second, parsed)) {
+        runtime_config_.enable_deadline_warnings = parsed;
+      } else {
+        RCUTILS_LOG_WARN_NAMED(
+          kLoggerName,
+          "Invalid enable_deadline_warnings '%s'; keeping default",
+          deadline_warnings_it->second.c_str());
+      }
+    }
+
     auto bool_it = params.find("gate_outputs_with_lifecycle");
     if (bool_it != params.end()) {
       bool parsed = safety_config_.gate_outputs_with_lifecycle;
