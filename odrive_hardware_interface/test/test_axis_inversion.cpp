@@ -141,7 +141,6 @@ TEST_F(AxisInversionTest, ConfigurationParsesInvertAxisParameter)
   TestHardwareInterface interface;
   interface.set_diagnostics_factory(make_fake_diagnostics_factory());
 
-  const std::int64_t serial = 0x00000000000000E1LL;
   const int axis = 0;
 
   hardware_interface::HardwareInfo info;
