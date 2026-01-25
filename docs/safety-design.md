@@ -361,9 +361,8 @@ Before deploying in production:
 
 This hardware interface provides **motor-level safety**. For complete system safety, integrate with:
 
-1. **Safety Supervisor Node** (`wackerbot_safety_supervisor`)
-   - Monitors `<joint>/healthy` flags
-   - Enforces velocity limits based on environment
+1. **Safety Supervisor Node**
+   - Monitors `<joint>/healthy` flags and controller status
    - Triggers lifecycle transitions on faults
 
 2. **Hardware E-Stop**
@@ -374,6 +373,7 @@ This hardware interface provides **motor-level safety**. For complete system saf
    - Collision avoidance
    - Obstacle detection
    - Path validity
+   - Velocity limit enforcement 
 
 4. **Battery Management**
    - Monitor `<sensor>/vbus_voltage`
