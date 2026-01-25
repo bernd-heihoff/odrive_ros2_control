@@ -183,6 +183,7 @@ private:
   {
     std::int64_t serial_number{0};
     int axis{0};
+    bool invert_axis{false};  // Invert position/velocity/effort signs
     float torque_constant{std::numeric_limits<float>::quiet_NaN()};
 
     // Previous command values for rate limiting

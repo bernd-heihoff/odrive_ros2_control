@@ -178,6 +178,16 @@ bool parse_hardware_configuration(
 
     JointConfig joint_config;
     joint_config.name = joint.name;
+    
+    // invert_axis is optional (defaults to false)
+    joint_config.invert_axis = false;
+    const auto invert_axis_it = joint.parameters.find("invert_axis");
+    if (invert_axis_it != joint.parameters.end()) {
+      if (!parse_bool(invert_axis_it->second, joint_config.invert_axis)) {
+        error_message = "Joint '" + joint.name + "' has invalid 'invert_axis' value";
+        return false;
+      }
+    }
     if (!parse_hex_serial(serial_it->second, joint_config.serial_number)) {
       error_message = "Joint '" + joint.name + "' has invalid 'serial_number' value";
       return false;

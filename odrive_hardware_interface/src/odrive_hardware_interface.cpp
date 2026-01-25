@@ -417,11 +417,12 @@ CallbackReturn ODriveHardwareInterface::configure_from_info(
     ODriveHardwareInterface::JointContext joint;
     joint.serial_number = joint_config.serial_number;
     joint.axis = joint_config.axis;
+    joint.invert_axis = joint_config.invert_axis;
     joint.enable_watchdog = joint_config.enable_watchdog;
     joint.command_limits = joint_config.command_limits;
     joint.feedback_limits = joint_config.feedback_limits;
     joints_.emplace_back(joint);
-  }
+  }  
 
   drives_.clear();
   drives_.reserve(hardware_config_.joints.size());
@@ -1379,9 +1380,11 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
       std::isfinite(sample.controller_error) && sample.controller_error == 0.0;
     joints_[i].healthy = errors_clear ? 1.0 : 0.0;
 
-    joints_[i].effort = sample.effort;
-    joints_[i].velocity = sample.velocity;
-    joints_[i].position = sample.position;
+    // Apply axis inversion if configured (for reversed motor wiring)
+    const double sign = joints_[i].invert_axis ? -1.0 : 1.0;
+    joints_[i].effort = sample.effort * sign;
+    joints_[i].velocity = sample.velocity * sign;
+    joints_[i].position = sample.position * sign;
     joints_[i].axis_error = sample.axis_error;
     joints_[i].motor_error = sample.motor_error;
     joints_[i].encoder_error = sample.encoder_error;
@@ -1391,9 +1394,9 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
     joints_[i].read_error = 0.0;
     joints_[i].telemetry_valid = 1.0;
 
-    // Update last valid values for discontinuity detection
-    joints_[i].last_valid_position = sample.position;
-    joints_[i].last_valid_velocity = sample.velocity;
+    // Update last valid values for discontinuity detection (with inversion applied)
+    joints_[i].last_valid_position = sample.position * sign;
+    joints_[i].last_valid_velocity = sample.velocity * sign;
 
     if (const auto sensor_index = find_sensor_index(joints_[i].serial_number)) {
       sensors_[*sensor_index].transport_error = 0.0;
@@ -1659,6 +1662,14 @@ return_type ODriveHardwareInterface::write(
     // Note: Watchdog feed is intentionally tied to command writes to detect
     // control loop failures. If commands stop (lifecycle gating, fault masking),
     // the watchdog will expire and safely halt the motor.
+    
+    // Apply axis inversion if configured (for reversed motor wiring)
+    if (joints_[i].invert_axis) {
+      command_state.command_position *= -1.0;
+      command_state.command_velocity *= -1.0;
+      command_state.command_effort *= -1.0;
+    }
+    
     std::string failing_stage;
     if (const int status = write_axis_command(
         *transport_, joints_[i].serial_number, joints_[i].axis, joints_[i].control_level,

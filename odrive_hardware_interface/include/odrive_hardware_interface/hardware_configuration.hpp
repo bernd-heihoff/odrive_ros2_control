@@ -34,6 +34,7 @@ struct JointConfig
   int axis;
   bool enable_watchdog;
   double watchdog_timeout;
+  bool invert_axis;  // Invert position/velocity/effort signs (for reversed motor wiring)
   struct CommandLimits
   {
     std::optional<double> position_min;
