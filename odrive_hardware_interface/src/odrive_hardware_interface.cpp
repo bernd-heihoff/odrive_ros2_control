@@ -669,14 +669,20 @@ CallbackReturn ODriveHardwareInterface::on_activate(const rclcpp_lifecycle::Stat
       hardware_config_.joints[i].watchdog_timeout);
   }
 
-  // Attempt hardware connection - if this fails, hardware stays INACTIVE and node continues
+  // Attempt hardware connection.
+  // If this fails, keep the component ACTIVE but do not enable outputs.
+  // read()/write() already handle transport errors gracefully and will report unhealthy state.
   const auto init_result = initialize_transport();
   if (init_result != CallbackReturn::SUCCESS) {
+    if (safety_config_.gate_outputs_with_lifecycle) {
+      outputs_enabled_.store(false, std::memory_order_release);
+    }
     RCUTILS_LOG_ERROR_NAMED(
       kLoggerName,
       "Failed to initialize ODrive transport during activation. "
-      "Hardware will remain INACTIVE. Check USB connections and try activating again.");
-    return init_result;
+      "Continuing without hardware (outputs disabled). "
+      "Check USB connections and reactivate to retry.");
+    return CallbackReturn::SUCCESS;
   }
 
   if (safety_config_.gate_outputs_with_lifecycle) {
@@ -712,6 +718,10 @@ CallbackReturn ODriveHardwareInterface::on_deactivate(const rclcpp_lifecycle::St
     // Atomic store with release semantics ensures deactivation is visible
     // to write() thread before it checks the flag
     outputs_enabled_.store(false, std::memory_order_release);
+  }
+
+  if (!transport_) {
+    return CallbackReturn::SUCCESS;
   }
 
   constexpr std::int32_t requested_state = kAxisStateIdle;
@@ -903,6 +913,10 @@ return_type ODriveHardwareInterface::prepare_command_mode_switch(
 return_type ODriveHardwareInterface::perform_command_mode_switch(
   const std::vector<std::string> &, const std::vector<std::string> &)
 {
+  if (!transport_) {
+    return return_type::OK;
+  }
+
   for (std::size_t i = 0; i < info_.joints.size(); i++) {
     const bool has_fault = safety_config_.mask_faulted_axes &&
       (extract_error_value(joints_[i].axis_error).has_value() ||

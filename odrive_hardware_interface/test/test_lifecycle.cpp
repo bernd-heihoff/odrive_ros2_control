@@ -283,8 +283,8 @@ TEST_F(LifecycleTest, ActivateFailsWhenTransportCannotMatchSerials)
   // configure should succeed (doesn't connect to hardware anymore)
   ASSERT_EQ(CallbackReturn::SUCCESS, interface.configure(info));
 
-  // activate should fail when transport initialization fails
-  EXPECT_EQ(CallbackReturn::ERROR, interface.on_activate(rclcpp_lifecycle::State{}));
+  // activate succeeds even when transport initialization fails (hardware offline)
+  EXPECT_EQ(CallbackReturn::SUCCESS, interface.on_activate(rclcpp_lifecycle::State{}));
   ASSERT_NE(nullptr, transport);
   EXPECT_EQ(1u, transport->initialize_call_count());
   ASSERT_TRUE(transport->last_initialize_serials().has_value());
@@ -364,10 +364,56 @@ TEST_F(LifecycleTest, OnActivateConnectsToHardwareAndCanFail)
 
   ASSERT_EQ(CallbackReturn::SUCCESS, interface.configure(info));
 
-  // on_activate should fail when transport initialization fails
-  EXPECT_EQ(CallbackReturn::ERROR, interface.on_activate(rclcpp_lifecycle::State{}));
+  // on_activate succeeds even when transport initialization fails (hardware offline)
+  EXPECT_EQ(CallbackReturn::SUCCESS, interface.on_activate(rclcpp_lifecycle::State{}));
   ASSERT_NE(nullptr, transport);
   EXPECT_TRUE(transport->expectations_satisfied());
+}
+
+TEST_F(LifecycleTest, PerformCommandModeSwitchWithNullTransportReturnsOk)
+{
+  TestHardwareInterface interface;
+  interface.set_diagnostics_factory(make_fake_diagnostics_factory());
+
+  // Transport factory returns null -> transport_ remains null
+  interface.set_transport_factory([]() {return nullptr;});
+
+  hardware_interface::HardwareInfo info;
+  info.hardware_parameters["publish_diagnostics"] = "false";
+
+  hardware_interface::ComponentInfo joint;
+  joint.name = "wheel";
+  joint.parameters["serial_number"] = "123456789ABC";
+  joint.parameters["axis"] = "0";
+  joint.parameters["watchdog_timeout"] = "0.10";
+  joint.parameters["enable_watchdog"] = "false";
+  info.joints.push_back(joint);
+
+  ASSERT_EQ(CallbackReturn::SUCCESS, interface.configure(info));
+  EXPECT_EQ(return_type::OK, interface.perform_command_mode_switch({}, {}));
+}
+
+TEST_F(LifecycleTest, OnDeactivateWithNullTransportSucceeds)
+{
+  TestHardwareInterface interface;
+  interface.set_diagnostics_factory(make_fake_diagnostics_factory());
+
+  // Transport factory returns null -> transport_ remains null
+  interface.set_transport_factory([]() {return nullptr;});
+
+  hardware_interface::HardwareInfo info;
+  info.hardware_parameters["publish_diagnostics"] = "false";
+
+  hardware_interface::ComponentInfo joint;
+  joint.name = "wheel";
+  joint.parameters["serial_number"] = "123456789ABC";
+  joint.parameters["axis"] = "0";
+  joint.parameters["watchdog_timeout"] = "0.10";
+  joint.parameters["enable_watchdog"] = "false";
+  info.joints.push_back(joint);
+
+  ASSERT_EQ(CallbackReturn::SUCCESS, interface.configure(info));
+  EXPECT_EQ(CallbackReturn::SUCCESS, interface.on_deactivate(rclcpp_lifecycle::State{}));
 }
 
 TEST_F(LifecycleTest, OnActivateSucceedsWhenHardwareAvailable)
