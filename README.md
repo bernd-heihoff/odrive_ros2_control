@@ -201,7 +201,7 @@ Add a `<sensor>` entry per unique ODrive you monitor for bus voltage. When multi
 ## Diagnostics and monitoring
 
 - Axis / motor / encoder / controller error transitions are logged via `rclcpp::Logger` warnings with decoded bit masks. Use the new unit tests (see below) as a reference for expected log messages.
-- The hardware interface resets telemetry to `NaN` when transport communication drops, making it easy to detect stale data in controllers.
+- The hardware interface marks telemetry as invalid when transport communication drops. Diagnostic/telemetry fields may reset to `NaN`, while joint kinematic state stays finite (position frozen; velocity/effort zero) to avoid propagating `NaN` into TF.
 - `recover()` can be called through lifecycle transitions to reinitialize the transport, clear errors, and resume operation without restarting the process.
 
 ### Axis health state

@@ -14,6 +14,7 @@
 
 #include <gtest/gtest.h>
 
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <mutex>
@@ -46,6 +47,207 @@ public:
     return configure_from_info(info);
   }
 };
+
+TEST_F(LifecycleTest, CleanupAndRecoverFreezePositionAndZeroOthers)
+{
+  TestHardwareInterface interface;
+  interface.set_diagnostics_factory(make_fake_diagnostics_factory());
+  const std::int64_t serial = 0x123456789ABCLL;
+  const int axis = 0;
+  const float torque_constant = 2.0F;
+
+  MockTransport * transport = nullptr;
+  int creation_index = 0;
+  interface.set_transport_factory(
+    [&]() {
+      auto instance = std::make_unique<MockTransport>();
+      transport = instance.get();
+      instance->expect_read(
+        serial,
+        axis_endpoint(odrive::AXIS__MOTOR__CONFIG__TORQUE_CONSTANT, axis),
+        torque_constant);
+      instance->expect_write(
+        serial,
+        axis_endpoint(odrive::AXIS__CONFIG__ENABLE_WATCHDOG, axis),
+        static_cast<bool>(false));
+      instance->expect_call(serial, axis_endpoint(odrive::AXIS__CLEAR_ERRORS, axis));
+      ++creation_index;
+      return instance;
+    });
+
+  hardware_interface::HardwareInfo info;
+  info.hardware_parameters["publish_diagnostics"] = "false";
+
+  hardware_interface::ComponentInfo joint;
+  joint.name = "wheel";
+  joint.parameters["serial_number"] = "123456789ABC";
+  joint.parameters["axis"] = "0";
+  joint.parameters["watchdog_timeout"] = "0.10";
+  joint.parameters["enable_watchdog"] = "false";
+  info.joints.push_back(joint);
+
+  ASSERT_EQ(CallbackReturn::SUCCESS, interface.configure(info));
+  ASSERT_EQ(0, creation_index);
+  ASSERT_EQ(CallbackReturn::SUCCESS, interface.on_activate(rclcpp_lifecycle::State{}));
+  ASSERT_EQ(1, creation_index);
+  ASSERT_NE(nullptr, transport);
+  EXPECT_TRUE(transport->expectations_satisfied());
+
+  auto find_state =
+    [](std::vector<hardware_interface::StateInterface> & states,
+      const std::string & prefix,
+      const std::string & name) -> hardware_interface::StateInterface * {
+      for (auto & state : states) {
+        if (state.get_prefix_name() == prefix && state.get_interface_name() == name) {
+          return &state;
+        }
+      }
+      return nullptr;
+    };
+
+  // Seed a non-zero finite state via read()
+  const std::uint32_t can_error = 0U;
+  transport->expect_read(serial, odrive::CAN__ERROR, can_error);
+
+  const float iq_measured = 0.0F;
+  transport->expect_read(
+    serial,
+    axis_endpoint(odrive::AXIS__MOTOR__CURRENT_CONTROL__IQ_MEASURED, axis),
+    iq_measured);
+  const float vel_estimate = 0.0F;
+  transport->expect_read(
+    serial,
+    axis_endpoint(odrive::AXIS__ENCODER__VEL_ESTIMATE, axis),
+    vel_estimate);
+  const double expected_pos1 = 1.234;
+  const float pos_estimate = static_cast<float>(expected_pos1 / (2.0 * M_PI));
+  transport->expect_read(
+    serial,
+    axis_endpoint(odrive::AXIS__ENCODER__POS_ESTIMATE, axis),
+    pos_estimate);
+  const std::int32_t axis_error = 0;
+  transport->expect_read(serial, axis_endpoint(odrive::AXIS__ERROR, axis), axis_error);
+  const std::int32_t motor_error = 0;
+  transport->expect_read(serial, axis_endpoint(odrive::AXIS__MOTOR__ERROR, axis), motor_error);
+  const std::int32_t encoder_error = 0;
+  transport->expect_read(
+    serial,
+    axis_endpoint(odrive::AXIS__ENCODER__ERROR, axis),
+    encoder_error);
+  const std::int32_t controller_error = 0;
+  transport->expect_read(
+    serial,
+    axis_endpoint(odrive::AXIS__CONTROLLER__ERROR, axis),
+    controller_error);
+  const float fet_temperature = 0.0F;
+  transport->expect_read(
+    serial,
+    axis_endpoint(odrive::AXIS__FET_THERMISTOR__TEMPERATURE, axis),
+    fet_temperature);
+  const float motor_temperature = 0.0F;
+  transport->expect_read(
+    serial,
+    axis_endpoint(odrive::AXIS__MOTOR_THERMISTOR__TEMPERATURE, axis),
+    motor_temperature);
+
+  EXPECT_EQ(return_type::OK, interface.read(rclcpp::Time{}, rclcpp::Duration(0, 0)));
+  EXPECT_TRUE(transport->expectations_satisfied());
+
+  auto state_interfaces = interface.export_state_interfaces();
+  auto * position = find_state(state_interfaces, "wheel", hardware_interface::HW_IF_POSITION);
+  ASSERT_NE(nullptr, position);
+  const double pos1 = position->get_value();
+  EXPECT_TRUE(std::isfinite(pos1));
+  EXPECT_NEAR(expected_pos1, pos1, 1e-6);
+
+  ASSERT_EQ(CallbackReturn::SUCCESS, interface.on_cleanup(rclcpp_lifecycle::State{}));
+
+  // After cleanup, position should be frozen (finite), and velocity/effort reset to zero.
+  auto state_after_cleanup = interface.export_state_interfaces();
+  auto * position_after_cleanup = find_state(
+    state_after_cleanup, "wheel", hardware_interface::HW_IF_POSITION);
+  auto * velocity_after_cleanup = find_state(
+    state_after_cleanup, "wheel", hardware_interface::HW_IF_VELOCITY);
+  auto * effort_after_cleanup = find_state(
+    state_after_cleanup, "wheel", hardware_interface::HW_IF_EFFORT);
+  ASSERT_NE(nullptr, position_after_cleanup);
+  ASSERT_NE(nullptr, velocity_after_cleanup);
+  ASSERT_NE(nullptr, effort_after_cleanup);
+
+  EXPECT_TRUE(std::isfinite(position_after_cleanup->get_value()));
+  EXPECT_NEAR(pos1, position_after_cleanup->get_value(), 1e-12);
+  EXPECT_DOUBLE_EQ(0.0, velocity_after_cleanup->get_value());
+  EXPECT_DOUBLE_EQ(0.0, effort_after_cleanup->get_value());
+
+  // Reactivate, seed another finite state via read(), and ensure recover() preserves it as well.
+  ASSERT_EQ(CallbackReturn::SUCCESS, interface.on_activate(rclcpp_lifecycle::State{}));
+  ASSERT_EQ(2, creation_index);
+  ASSERT_NE(nullptr, transport);
+  EXPECT_TRUE(transport->expectations_satisfied());
+
+  transport->expect_read(serial, odrive::CAN__ERROR, can_error);
+  transport->expect_read(
+    serial,
+    axis_endpoint(odrive::AXIS__MOTOR__CURRENT_CONTROL__IQ_MEASURED, axis),
+    iq_measured);
+  transport->expect_read(
+    serial,
+    axis_endpoint(odrive::AXIS__ENCODER__VEL_ESTIMATE, axis),
+    vel_estimate);
+  const double expected_pos2 = 2.5;
+  const float pos_estimate2 = static_cast<float>(expected_pos2 / (2.0 * M_PI));
+  transport->expect_read(
+    serial,
+    axis_endpoint(odrive::AXIS__ENCODER__POS_ESTIMATE, axis),
+    pos_estimate2);
+  transport->expect_read(serial, axis_endpoint(odrive::AXIS__ERROR, axis), axis_error);
+  transport->expect_read(serial, axis_endpoint(odrive::AXIS__MOTOR__ERROR, axis), motor_error);
+  transport->expect_read(
+    serial,
+    axis_endpoint(odrive::AXIS__ENCODER__ERROR, axis),
+    encoder_error);
+  transport->expect_read(
+    serial,
+    axis_endpoint(odrive::AXIS__CONTROLLER__ERROR, axis),
+    controller_error);
+  transport->expect_read(
+    serial,
+    axis_endpoint(odrive::AXIS__FET_THERMISTOR__TEMPERATURE, axis),
+    fet_temperature);
+  transport->expect_read(
+    serial,
+    axis_endpoint(odrive::AXIS__MOTOR_THERMISTOR__TEMPERATURE, axis),
+    motor_temperature);
+
+  EXPECT_EQ(return_type::OK, interface.read(rclcpp::Time{}, rclcpp::Duration(0, 0)));
+  EXPECT_TRUE(transport->expectations_satisfied());
+
+  auto state_after_second_read = interface.export_state_interfaces();
+  auto * position_after_second_read = find_state(
+    state_after_second_read, "wheel", hardware_interface::HW_IF_POSITION);
+  ASSERT_NE(nullptr, position_after_second_read);
+  const double pos2 = position_after_second_read->get_value();
+  EXPECT_TRUE(std::isfinite(pos2));
+  EXPECT_NEAR(expected_pos2, pos2, 1e-6);
+
+  ASSERT_EQ(CallbackReturn::SUCCESS, interface.recover());
+
+  auto state_after_recover = interface.export_state_interfaces();
+  auto * position_after_recover = find_state(
+    state_after_recover, "wheel", hardware_interface::HW_IF_POSITION);
+  auto * velocity_after_recover = find_state(
+    state_after_recover, "wheel", hardware_interface::HW_IF_VELOCITY);
+  auto * effort_after_recover = find_state(
+    state_after_recover, "wheel", hardware_interface::HW_IF_EFFORT);
+  ASSERT_NE(nullptr, position_after_recover);
+  ASSERT_NE(nullptr, velocity_after_recover);
+  ASSERT_NE(nullptr, effort_after_recover);
+
+  EXPECT_TRUE(std::isfinite(position_after_recover->get_value()));
+  EXPECT_NEAR(pos2, position_after_recover->get_value(), 1e-12);
+  EXPECT_DOUBLE_EQ(0.0, velocity_after_recover->get_value());
+  EXPECT_DOUBLE_EQ(0.0, effort_after_recover->get_value());
+}
 
 TEST_F(LifecycleTest, RecoverReinitializesTransport)
 {

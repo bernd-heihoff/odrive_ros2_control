@@ -255,13 +255,25 @@ void ODriveHardwareInterface::reset_runtime_state()
   }
 
   for (auto & joint : joints_) {
-    joint.command_position = std::numeric_limits<double>::quiet_NaN();
-    joint.command_velocity = std::numeric_limits<double>::quiet_NaN();
-    joint.command_effort = std::numeric_limits<double>::quiet_NaN();
+    // Keep TF-safe kinematic state finite across deactivation/recovery.
+    // Freeze to last known finite position; zero velocity/effort.
+    if (!std::isfinite(joint.position)) {
+      joint.position = 0.0;
+    }
+    joint.velocity = 0.0;
+    joint.effort = 0.0;
 
-    joint.position = std::numeric_limits<double>::quiet_NaN();
-    joint.velocity = std::numeric_limits<double>::quiet_NaN();
-    joint.effort = std::numeric_limits<double>::quiet_NaN();
+    // Reset command values to safe finite defaults.
+    joint.command_position = joint.position;
+    joint.command_velocity = 0.0;
+    joint.command_effort = 0.0;
+
+    joint.last_command_position = joint.command_position;
+    joint.last_command_velocity = joint.command_velocity;
+    joint.last_command_effort = joint.command_effort;
+
+    joint.last_valid_position = joint.position;
+    joint.last_valid_velocity = joint.velocity;
 
     joint.axis_error = std::numeric_limits<double>::quiet_NaN();
     joint.motor_error = std::numeric_limits<double>::quiet_NaN();
