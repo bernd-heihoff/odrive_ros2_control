@@ -28,6 +28,7 @@ constexpr unsigned int kUsbTimeoutMs = 100;
 namespace
 {
 constexpr std::uint64_t kUsbWarnThrottleMs = 1000;
+constexpr std::uint64_t kUsbErrorThrottleMs = 2000;
 }  // namespace
 constexpr std::uint16_t kMsbMask = 0x8000u;
 constexpr std::uint16_t kSequenceMask = 0x7fffu;
@@ -170,10 +171,6 @@ int ODriveUSB::read(libusb_device_handle * odrive_handle, std::int16_t endpoint_
     odrive_handle, endpoint_id, static_cast<std::int16_t>(sizeof(T)), request_payload,
     response_payload, true);
   if (ret != LIBUSB_SUCCESS) {
-    RCUTILS_LOG_ERROR_NAMED(
-      kUsbLogger, "Endpoint read error (endpoint %d): %s",
-      static_cast<int>(endpoint_id),
-      libusb_error_name(ret));
     return ret;
   }
   if (response_payload.size() < sizeof(T)) {
@@ -242,12 +239,21 @@ int ODriveUSB::endpointOperation(
     odrive_handle, ODRIVE_OUT_ENDPOINT, request_packet.data(), request_packet.size(), &transferred,
     kUsbTimeoutMs);
   if (ret != LIBUSB_SUCCESS) {
-    RCUTILS_LOG_ERROR_NAMED(
-      kUsbLogger,
-      "Bulk transfer failed on OUT endpoint (seq: %d, endpoint: %d): %s",
-      static_cast<int>(sequence_number),
-      static_cast<int>(effective_endpoint),
-      libusb_error_name(ret));
+    if (ret == LIBUSB_ERROR_NO_DEVICE) {
+      RCUTILS_LOG_WARN_THROTTLE_NAMED(
+        RCUTILS_STEADY_TIME, kUsbErrorThrottleMs, kUsbLogger,
+        "Bulk transfer failed on OUT endpoint (seq: %d, endpoint: %d): %s",
+        static_cast<int>(sequence_number),
+        static_cast<int>(effective_endpoint),
+        libusb_error_name(ret));
+    } else {
+      RCUTILS_LOG_ERROR_THROTTLE_NAMED(
+        RCUTILS_STEADY_TIME, kUsbErrorThrottleMs, kUsbLogger,
+        "Bulk transfer failed on OUT endpoint (seq: %d, endpoint: %d): %s",
+        static_cast<int>(sequence_number),
+        static_cast<int>(effective_endpoint),
+        libusb_error_name(ret));
+    }
     return ret;
   }
 
@@ -256,12 +262,21 @@ int ODriveUSB::endpointOperation(
       odrive_handle, ODRIVE_IN_ENDPOINT, response_data, ODRIVE_MAX_PACKET_SIZE, &transferred,
       kUsbTimeoutMs);
     if (ret != LIBUSB_SUCCESS) {
-      RCUTILS_LOG_ERROR_NAMED(
-        kUsbLogger,
-        "Bulk transfer failed on IN endpoint (seq: %d, endpoint: %d): %s",
-        static_cast<int>(sequence_number),
-        static_cast<int>(effective_endpoint),
-        libusb_error_name(ret));
+      if (ret == LIBUSB_ERROR_NO_DEVICE) {
+        RCUTILS_LOG_WARN_THROTTLE_NAMED(
+          RCUTILS_STEADY_TIME, kUsbErrorThrottleMs, kUsbLogger,
+          "Bulk transfer failed on IN endpoint (seq: %d, endpoint: %d): %s",
+          static_cast<int>(sequence_number),
+          static_cast<int>(effective_endpoint),
+          libusb_error_name(ret));
+      } else {
+        RCUTILS_LOG_ERROR_THROTTLE_NAMED(
+          RCUTILS_STEADY_TIME, kUsbErrorThrottleMs, kUsbLogger,
+          "Bulk transfer failed on IN endpoint (seq: %d, endpoint: %d): %s",
+          static_cast<int>(sequence_number),
+          static_cast<int>(effective_endpoint),
+          libusb_error_name(ret));
+      }
       return ret;
     }
     if (transferred < response_size) {

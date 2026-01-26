@@ -1287,6 +1287,8 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
     for (auto & joint : joints_) {
       joint.healthy = 0.0;
       joint.telemetry_valid = 0.0;
+      joint.velocity = 0.0;
+      joint.effort = 0.0;
     }
     for (auto & sensor : sensors_) {
       sensor.vbus_voltage = std::numeric_limits<double>::quiet_NaN();
@@ -1366,6 +1368,8 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
       joints_[i].read_error = static_cast<double>(status);
       joints_[i].telemetry_valid = 0.0;
       joints_[i].healthy = 0.0;
+      joints_[i].velocity = 0.0;
+      joints_[i].effort = 0.0;
       std::string action = failing_stage.empty() ? "reading axis telemetry" :
         "reading axis telemetry (" + failing_stage + ")";
       RCUTILS_LOG_WARN_THROTTLE_NAMED(
@@ -1428,6 +1432,8 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
       joints_[i].read_error = -1.0;  // Validation error
       joints_[i].telemetry_valid = 0.0;
       joints_[i].healthy = 0.0;
+      joints_[i].velocity = 0.0;
+      joints_[i].effort = 0.0;
       RCUTILS_LOG_WARN_THROTTLE_NAMED(
         RCUTILS_STEADY_TIME, runtime_config_.log_throttle_ms, kLoggerName,
         "Feedback validation failed for joint[%zu]='%s': %s. "
@@ -1447,9 +1453,15 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
 
     // Apply axis inversion if configured (for reversed motor wiring)
     const double sign = joints_[i].invert_axis ? -1.0 : 1.0;
-    joints_[i].effort = sample.effort * sign;
-    joints_[i].velocity = sample.velocity * sign;
-    joints_[i].position = sample.position * sign;
+    if (errors_clear) {
+      joints_[i].effort = sample.effort * sign;
+      joints_[i].velocity = sample.velocity * sign;
+      joints_[i].position = sample.position * sign;
+    } else {
+      // Axis is unhealthy (error registers non-zero): freeze position and zero velocity/effort.
+      joints_[i].velocity = 0.0;
+      joints_[i].effort = 0.0;
+    }
     joints_[i].axis_error = sample.axis_error;
     joints_[i].motor_error = sample.motor_error;
     joints_[i].encoder_error = sample.encoder_error;

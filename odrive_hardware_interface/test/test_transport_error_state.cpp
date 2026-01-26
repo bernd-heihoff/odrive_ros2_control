@@ -209,27 +209,34 @@ TEST(TransportErrorStateTest, HealthyResetsToUnhealthyOnReadFailure)
 
   auto state_interfaces = interface.export_state_interfaces();
   auto * healthy = find_state_interface(state_interfaces, "wheel", "healthy");
+  auto * position = find_state_interface(state_interfaces, "wheel", "position");
+  auto * velocity = find_state_interface(state_interfaces, "wheel", "velocity");
+  auto * effort = find_state_interface(state_interfaces, "wheel", "effort");
   ASSERT_NE(nullptr, healthy);
+  ASSERT_NE(nullptr, position);
+  ASSERT_NE(nullptr, velocity);
+  ASSERT_NE(nullptr, effort);
   EXPECT_EQ(0.0, healthy->get_value());
 
   // First read succeeds with all errors clear => healthy.
+  double position_before_failure = std::numeric_limits<double>::quiet_NaN();
   {
     const std::uint32_t can_error = 0U;
     transport->expect_read(serial, odrive::CAN__ERROR, can_error);
 
-    const float iq_measured = 0.0F;
+    const float iq_measured = 3.0F;
     transport->expect_read(
       serial,
       axis_endpoint(odrive::AXIS__MOTOR__CURRENT_CONTROL__IQ_MEASURED, axis),
       iq_measured);
 
-    const float vel_estimate = 0.0F;
+    const float vel_estimate = 2.0F;
     transport->expect_read(
       serial,
       axis_endpoint(odrive::AXIS__ENCODER__VEL_ESTIMATE, axis),
       vel_estimate);
 
-    const float pos_estimate = 0.0F;
+    const float pos_estimate = 1.0F;
     transport->expect_read(
       serial,
       axis_endpoint(odrive::AXIS__ENCODER__POS_ESTIMATE, axis),
@@ -260,6 +267,9 @@ TEST(TransportErrorStateTest, HealthyResetsToUnhealthyOnReadFailure)
     EXPECT_EQ(return_type::OK, interface.read(rclcpp::Time{}, rclcpp::Duration(0, 0)));
     EXPECT_TRUE(transport->expectations_satisfied());
     EXPECT_EQ(1.0, healthy->get_value());
+    EXPECT_NE(0.0, velocity->get_value());
+    EXPECT_NE(0.0, effort->get_value());
+    position_before_failure = position->get_value();
   }
 
   // Second read fails early during telemetry => healthy must reset to unhealthy.
@@ -277,6 +287,9 @@ TEST(TransportErrorStateTest, HealthyResetsToUnhealthyOnReadFailure)
     EXPECT_EQ(return_type::OK, interface.read(rclcpp::Time{}, rclcpp::Duration(0, 0)));
     EXPECT_TRUE(transport->expectations_satisfied());
     EXPECT_EQ(0.0, healthy->get_value());
+    EXPECT_EQ(0.0, velocity->get_value());
+    EXPECT_EQ(0.0, effort->get_value());
+    EXPECT_EQ(position_before_failure, position->get_value());
   }
 }
 
@@ -314,22 +327,28 @@ TEST(TransportErrorStateTest, HealthyIsUnhealthyWhenAxisErrorRegisterNonzero)
 
   auto state_interfaces = interface.export_state_interfaces();
   auto * healthy = find_state_interface(state_interfaces, "wheel", "healthy");
+  auto * position = find_state_interface(state_interfaces, "wheel", "position");
+  auto * velocity = find_state_interface(state_interfaces, "wheel", "velocity");
+  auto * effort = find_state_interface(state_interfaces, "wheel", "effort");
   ASSERT_NE(nullptr, healthy);
+  ASSERT_NE(nullptr, position);
+  ASSERT_NE(nullptr, velocity);
+  ASSERT_NE(nullptr, effort);
 
-  const auto expect_full_telemetry = [&](int32_t axis_error_value) {
-      const float iq_measured = 0.0F;
+  const auto expect_full_telemetry = [&](int32_t axis_error_value,
+      float iq_measured,
+      float vel_estimate,
+      float pos_estimate) {
       transport->expect_read(
         serial,
         axis_endpoint(odrive::AXIS__MOTOR__CURRENT_CONTROL__IQ_MEASURED, axis),
         iq_measured);
 
-      const float vel_estimate = 0.0F;
       transport->expect_read(
         serial,
         axis_endpoint(odrive::AXIS__ENCODER__VEL_ESTIMATE, axis),
         vel_estimate);
 
-      const float pos_estimate = 0.0F;
       transport->expect_read(
         serial,
         axis_endpoint(odrive::AXIS__ENCODER__POS_ESTIMATE, axis),
@@ -359,14 +378,34 @@ TEST(TransportErrorStateTest, HealthyIsUnhealthyWhenAxisErrorRegisterNonzero)
         motor_temperature);
     };
 
-  const std::uint32_t can_error = 0U;
-  transport->expect_read(serial, odrive::CAN__ERROR, can_error);
+  // First read: healthy and establishes a non-zero state.
+  double position_before_fault = std::numeric_limits<double>::quiet_NaN();
+  {
+    const std::uint32_t can_error = 0U;
+    transport->expect_read(serial, odrive::CAN__ERROR, can_error);
 
-  // Telemetry read succeeds but axis error is non-zero => unhealthy.
-  expect_full_telemetry(0x00000001);
-  EXPECT_EQ(return_type::OK, interface.read(rclcpp::Time{}, rclcpp::Duration(0, 0)));
-  EXPECT_TRUE(transport->expectations_satisfied());
-  EXPECT_EQ(0.0, healthy->get_value());
+    expect_full_telemetry(0x00000000, 3.0F, 2.0F, 1.0F);
+    EXPECT_EQ(return_type::OK, interface.read(rclcpp::Time{}, rclcpp::Duration(0, 0)));
+    EXPECT_TRUE(transport->expectations_satisfied());
+    EXPECT_EQ(1.0, healthy->get_value());
+    position_before_fault = position->get_value();
+    EXPECT_NE(0.0, velocity->get_value());
+    EXPECT_NE(0.0, effort->get_value());
+  }
+
+  // Second read: telemetry succeeds but axis error is non-zero => unhealthy.
+  {
+    const std::uint32_t can_error = 0U;
+    transport->expect_read(serial, odrive::CAN__ERROR, can_error);
+
+    expect_full_telemetry(0x00000001, 4.0F, 5.0F, 6.0F);
+    EXPECT_EQ(return_type::OK, interface.read(rclcpp::Time{}, rclcpp::Duration(0, 0)));
+    EXPECT_TRUE(transport->expectations_satisfied());
+    EXPECT_EQ(0.0, healthy->get_value());
+    EXPECT_EQ(0.0, velocity->get_value());
+    EXPECT_EQ(0.0, effort->get_value());
+    EXPECT_EQ(position_before_fault, position->get_value());
+  }
 }
 
 TEST(TransportErrorStateTest, HealthyDoesNotRemainStaleAcrossJointsWhenReadAbortsEarly)
