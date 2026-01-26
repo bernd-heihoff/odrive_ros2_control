@@ -245,6 +245,16 @@ void ODriveHardwareInterface::set_diagnostics_factory(DiagnosticsFactory factory
   diagnostics_factory_ = std::move(factory);
 }
 
+void ODriveHardwareInterface::hold_joint_state(JointContext & joint)
+{
+  if (!std::isfinite(joint.last_valid_position)) {
+    joint.last_valid_position = 0.0;
+  }
+  joint.position = joint.last_valid_position;
+  joint.velocity = 0.0;
+  joint.effort = 0.0;
+}
+
 void ODriveHardwareInterface::reset_runtime_state()
 {
   outputs_enabled_ = false;
@@ -1287,11 +1297,7 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
     for (auto & joint : joints_) {
       joint.healthy = 0.0;
       joint.telemetry_valid = 0.0;
-      if (!std::isfinite(joint.position)) {
-        joint.position = 0.0;
-      }
-      joint.velocity = 0.0;
-      joint.effort = 0.0;
+      hold_joint_state(joint);
     }
     for (auto & sensor : sensors_) {
       sensor.vbus_voltage = std::numeric_limits<double>::quiet_NaN();
@@ -1371,8 +1377,7 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
       joints_[i].read_error = static_cast<double>(status);
       joints_[i].telemetry_valid = 0.0;
       joints_[i].healthy = 0.0;
-      joints_[i].velocity = 0.0;
-      joints_[i].effort = 0.0;
+      hold_joint_state(joints_[i]);
       std::string action = failing_stage.empty() ? "reading axis telemetry" :
         "reading axis telemetry (" + failing_stage + ")";
       RCUTILS_LOG_WARN_THROTTLE_NAMED(
@@ -1435,8 +1440,7 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
       joints_[i].read_error = -1.0;  // Validation error
       joints_[i].telemetry_valid = 0.0;
       joints_[i].healthy = 0.0;
-      joints_[i].velocity = 0.0;
-      joints_[i].effort = 0.0;
+      hold_joint_state(joints_[i]);
       RCUTILS_LOG_WARN_THROTTLE_NAMED(
         RCUTILS_STEADY_TIME, runtime_config_.log_throttle_ms, kLoggerName,
         "Feedback validation failed for joint[%zu]='%s': %s. "
@@ -1462,8 +1466,7 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
       joints_[i].position = sample.position * sign;
     } else {
       // Axis is unhealthy (error registers non-zero): freeze position and zero velocity/effort.
-      joints_[i].velocity = 0.0;
-      joints_[i].effort = 0.0;
+      hold_joint_state(joints_[i]);
     }
     joints_[i].axis_error = sample.axis_error;
     joints_[i].motor_error = sample.motor_error;
@@ -1474,9 +1477,11 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
     joints_[i].read_error = 0.0;
     joints_[i].telemetry_valid = 1.0;
 
-    // Update last valid values for discontinuity detection (with inversion applied)
-    joints_[i].last_valid_position = sample.position * sign;
-    joints_[i].last_valid_velocity = sample.velocity * sign;
+    // Only advance the "last valid" values when we're actually accepting telemetry.
+    if (errors_clear) {
+      joints_[i].last_valid_position = joints_[i].position;
+      joints_[i].last_valid_velocity = joints_[i].velocity;
+    }
 
     if (const auto sensor_index = find_sensor_index(joints_[i].serial_number)) {
       sensors_[*sensor_index].transport_error = 0.0;

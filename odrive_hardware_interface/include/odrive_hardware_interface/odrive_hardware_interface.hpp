@@ -244,6 +244,8 @@ private:
     JointConfig::FeedbackLimits feedback_limits;
   };
 
+  static void hold_joint_state(JointContext & joint);
+
   TransportFactory transport_factory_;
   DiagnosticsFactory diagnostics_factory_;
   HardwareConfiguration hardware_config_;

@@ -487,6 +487,45 @@ TEST_F(LifecycleTest, ActivateFailsWhenTransportCannotMatchSerials)
 
   // activate succeeds even when transport initialization fails (hardware offline)
   EXPECT_EQ(CallbackReturn::SUCCESS, interface.on_activate(rclcpp_lifecycle::State{}));
+
+  // Joint state must remain finite and at safe defaults when hardware is offline.
+  // This is important for consumers like robot_state_publisher / TF.
+  {
+    auto state_interfaces = interface.export_state_interfaces();
+    double pos0 = std::numeric_limits<double>::quiet_NaN();
+    double vel0 = std::numeric_limits<double>::quiet_NaN();
+    double eff0 = std::numeric_limits<double>::quiet_NaN();
+    double pos1 = std::numeric_limits<double>::quiet_NaN();
+    double vel1 = std::numeric_limits<double>::quiet_NaN();
+    double eff1 = std::numeric_limits<double>::quiet_NaN();
+    for (auto & state : state_interfaces) {
+      if (state.get_prefix_name() == "wheel0") {
+        if (state.get_interface_name() == hardware_interface::HW_IF_POSITION) {
+          pos0 = state.get_value();
+        } else if (state.get_interface_name() == hardware_interface::HW_IF_VELOCITY) {
+          vel0 = state.get_value();
+        } else if (state.get_interface_name() == hardware_interface::HW_IF_EFFORT) {
+          eff0 = state.get_value();
+        }
+      }
+      if (state.get_prefix_name() == "wheel1") {
+        if (state.get_interface_name() == hardware_interface::HW_IF_POSITION) {
+          pos1 = state.get_value();
+        } else if (state.get_interface_name() == hardware_interface::HW_IF_VELOCITY) {
+          vel1 = state.get_value();
+        } else if (state.get_interface_name() == hardware_interface::HW_IF_EFFORT) {
+          eff1 = state.get_value();
+        }
+      }
+    }
+    EXPECT_DOUBLE_EQ(0.0, pos0);
+    EXPECT_DOUBLE_EQ(0.0, vel0);
+    EXPECT_DOUBLE_EQ(0.0, eff0);
+    EXPECT_DOUBLE_EQ(0.0, pos1);
+    EXPECT_DOUBLE_EQ(0.0, vel1);
+    EXPECT_DOUBLE_EQ(0.0, eff1);
+  }
+
   ASSERT_NE(nullptr, transport);
   EXPECT_EQ(1u, transport->initialize_call_count());
   ASSERT_TRUE(transport->last_initialize_serials().has_value());
@@ -568,6 +607,29 @@ TEST_F(LifecycleTest, OnActivateConnectsToHardwareAndCanFail)
 
   // on_activate succeeds even when transport initialization fails (hardware offline)
   EXPECT_EQ(CallbackReturn::SUCCESS, interface.on_activate(rclcpp_lifecycle::State{}));
+
+  // Joint state must remain at safe defaults even though activation succeeded.
+  {
+    auto state_interfaces = interface.export_state_interfaces();
+    double pos = std::numeric_limits<double>::quiet_NaN();
+    double vel = std::numeric_limits<double>::quiet_NaN();
+    double eff = std::numeric_limits<double>::quiet_NaN();
+    for (auto & state : state_interfaces) {
+      if (state.get_prefix_name() == "wheel") {
+        if (state.get_interface_name() == hardware_interface::HW_IF_POSITION) {
+          pos = state.get_value();
+        } else if (state.get_interface_name() == hardware_interface::HW_IF_VELOCITY) {
+          vel = state.get_value();
+        } else if (state.get_interface_name() == hardware_interface::HW_IF_EFFORT) {
+          eff = state.get_value();
+        }
+      }
+    }
+    EXPECT_DOUBLE_EQ(0.0, pos);
+    EXPECT_DOUBLE_EQ(0.0, vel);
+    EXPECT_DOUBLE_EQ(0.0, eff);
+  }
+
   ASSERT_NE(nullptr, transport);
   EXPECT_TRUE(transport->expectations_satisfied());
 }
