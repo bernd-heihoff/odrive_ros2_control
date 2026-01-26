@@ -704,6 +704,9 @@ TEST_F(LifecycleTest, ReadWithNullTransportReturnsOkAndMarksJointsUnhealthy)
   auto state_interfaces = interface.export_state_interfaces();
   hardware_interface::StateInterface * healthy = nullptr;
   hardware_interface::StateInterface * telemetry_valid = nullptr;
+  hardware_interface::StateInterface * position = nullptr;
+  hardware_interface::StateInterface * velocity = nullptr;
+  hardware_interface::StateInterface * effort = nullptr;
   for (auto & state : state_interfaces) {
     if (state.get_prefix_name() == "wheel" && state.get_interface_name() == "healthy") {
       healthy = &state;
@@ -711,14 +714,29 @@ TEST_F(LifecycleTest, ReadWithNullTransportReturnsOkAndMarksJointsUnhealthy)
     if (state.get_prefix_name() == "wheel" && state.get_interface_name() == "telemetry_valid") {
       telemetry_valid = &state;
     }
+    if (state.get_prefix_name() == "wheel" && state.get_interface_name() == "position") {
+      position = &state;
+    }
+    if (state.get_prefix_name() == "wheel" && state.get_interface_name() == "velocity") {
+      velocity = &state;
+    }
+    if (state.get_prefix_name() == "wheel" && state.get_interface_name() == "effort") {
+      effort = &state;
+    }
   }
   ASSERT_NE(nullptr, healthy);
   ASSERT_NE(nullptr, telemetry_valid);
+  ASSERT_NE(nullptr, position);
+  ASSERT_NE(nullptr, velocity);
+  ASSERT_NE(nullptr, effort);
 
   // read() should return OK even with null transport, and mark joints unhealthy
   EXPECT_EQ(return_type::OK, interface.read(rclcpp::Time{}, rclcpp::Duration(0, 0)));
   EXPECT_EQ(0.0, healthy->get_value());
   EXPECT_EQ(0.0, telemetry_valid->get_value());
+  EXPECT_EQ(0.0, position->get_value());
+  EXPECT_EQ(0.0, velocity->get_value());
+  EXPECT_EQ(0.0, effort->get_value());
 }
 
 TEST_F(LifecycleTest, WriteWithNullTransportReturnsOkWithoutCrashing)

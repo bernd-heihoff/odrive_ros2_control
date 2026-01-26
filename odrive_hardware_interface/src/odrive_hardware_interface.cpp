@@ -1287,6 +1287,9 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
     for (auto & joint : joints_) {
       joint.healthy = 0.0;
       joint.telemetry_valid = 0.0;
+      if (!std::isfinite(joint.position)) {
+        joint.position = 0.0;
+      }
       joint.velocity = 0.0;
       joint.effort = 0.0;
     }
