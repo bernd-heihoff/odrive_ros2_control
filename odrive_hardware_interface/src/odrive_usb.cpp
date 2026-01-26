@@ -25,6 +25,10 @@ namespace odrive
 namespace
 {
 constexpr unsigned int kUsbTimeoutMs = 100;
+namespace
+{
+constexpr std::uint64_t kUsbWarnThrottleMs = 1000;
+}  // namespace
 constexpr std::uint16_t kMsbMask = 0x8000u;
 constexpr std::uint16_t kSequenceMask = 0x7fffu;
 constexpr const char kUsbLogger[] = "ODriveUSB";
@@ -261,8 +265,8 @@ int ODriveUSB::endpointOperation(
       return ret;
     }
     if (transferred < response_size) {
-      RCUTILS_LOG_WARN_NAMED(
-        kUsbLogger,
+      RCUTILS_LOG_WARN_THROTTLE_NAMED(
+        RCUTILS_STEADY_TIME, kUsbWarnThrottleMs, kUsbLogger,
         "Bulk transfer (seq: %d, endpoint: %d): transferred %d bytes, expected %d",
         static_cast<int>(sequence_number),
         static_cast<int>(effective_endpoint),

@@ -1279,8 +1279,8 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
     for (auto & sensor : sensors_) {
       sensor.vbus_voltage = std::numeric_limits<double>::quiet_NaN();
     }
-    RCUTILS_LOG_WARN_NAMED(
-      kLoggerName,
+    RCUTILS_LOG_WARN_THROTTLE_NAMED(
+      RCUTILS_STEADY_TIME, runtime_config_.log_throttle_ms, kLoggerName,
       "Transport unavailable during read(). All joints marked unhealthy. "
       "Deactivate and reactivate hardware to reconnect.");
     return return_type::OK;
@@ -1309,8 +1309,8 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
     {
       sensors_[i].transport_error = static_cast<double>(status);
       sensors_[i].vbus_voltage = std::numeric_limits<double>::quiet_NaN();
-      RCUTILS_LOG_WARN_NAMED(
-        kLoggerName,
+      RCUTILS_LOG_WARN_THROTTLE_NAMED(
+        RCUTILS_STEADY_TIME, runtime_config_.log_throttle_ms, kLoggerName,
         "Transport error (%d) reading vbus voltage for sensor[%zu] "
         "(serial 0x%" PRIx64 "); continuing",
         status, i, static_cast<std::uint64_t>(sensors_[i].serial_number));
@@ -1527,8 +1527,8 @@ return_type ODriveHardwareInterface::write(
 
   // If transport lost, skip all writes. Joints are already marked unhealthy in read().
   if (!transport_) {
-    RCUTILS_LOG_WARN_NAMED(
-      kLoggerName,
+    RCUTILS_LOG_WARN_THROTTLE_NAMED(
+      RCUTILS_STEADY_TIME, runtime_config_.log_throttle_ms, kLoggerName,
       "Transport unavailable during write(). Skipping all command writes. "
       "Deactivate and reactivate hardware to reconnect.");
     return return_type::OK;
@@ -1688,8 +1688,8 @@ return_type ODriveHardwareInterface::write(
           requested_state);
         if (status != 0) {
           joints_[i].write_error = static_cast<double>(status);
-          RCUTILS_LOG_WARN_NAMED(
-            kLoggerName,
+          RCUTILS_LOG_WARN_THROTTLE_NAMED(
+            RCUTILS_STEADY_TIME, runtime_config_.log_throttle_ms, kLoggerName,
             "Transport error (%d) requesting axis idle state after fault "
             "for joint[%zu]='%s'; continuing",
             status, i, info_.joints[i].name.c_str());
