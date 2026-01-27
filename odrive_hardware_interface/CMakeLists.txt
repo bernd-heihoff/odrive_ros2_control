@@ -153,6 +153,12 @@ if(BUILD_TESTING)
     target_include_directories(test_axis_inversion PRIVATE ${TEST_INCLUDE_DIR})
     target_link_libraries(test_axis_inversion ${PROJECT_NAME})
   endif()
+
+  ament_add_gtest(test_command_claim_watchdog test/test_command_claim_watchdog.cpp)
+  if(TARGET test_command_claim_watchdog)
+    target_include_directories(test_command_claim_watchdog PRIVATE ${TEST_INCLUDE_DIR})
+    target_link_libraries(test_command_claim_watchdog ${PROJECT_NAME})
+  endif()
 endif()
 
 install(

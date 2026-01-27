@@ -759,13 +759,7 @@ TEST_F(LifecycleTest, OnActivateSucceedsWhenHardwareAvailable)
       instance->expect_write(
         serial,
         axis_endpoint(odrive::AXIS__CONFIG__ENABLE_WATCHDOG, axis),
-        static_cast<bool>(true));
-      instance->expect_call(
-        serial,
-        axis_endpoint(odrive::AXIS__WATCHDOG_FEED, axis));
-      instance->expect_call(
-        serial,
-        axis_endpoint(odrive::AXIS__WATCHDOG_FEED, axis));
+        static_cast<bool>(false));
       instance->expect_call(
         serial,
         axis_endpoint(odrive::AXIS__CLEAR_ERRORS, axis));

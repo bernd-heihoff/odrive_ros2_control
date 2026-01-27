@@ -1019,8 +1019,11 @@ return_type ODriveHardwareInterface::perform_command_mode_switch(
       if (idle_status != 0) {
         RCUTILS_LOG_WARN_NAMED(
           kLoggerName,
-          "Transport error (%d) requesting axis idle state on interface unclaim for joint[%zu]='%s'; continuing",
-          idle_status, i, info_.joints[i].name.c_str());
+          "Transport error (%d) requesting axis idle state on interface unclaim "
+          "for joint[%zu]='%s'; continuing",
+          idle_status,
+          i,
+          info_.joints[i].name.c_str());
       }
 
       const int disable_status = transport_->write(
@@ -1030,8 +1033,11 @@ return_type ODriveHardwareInterface::perform_command_mode_switch(
       if (disable_status != 0) {
         RCUTILS_LOG_WARN_NAMED(
           kLoggerName,
-          "Transport error (%d) disabling watchdog on interface unclaim for joint[%zu]='%s'; continuing",
-          disable_status, i, info_.joints[i].name.c_str());
+          "Transport error (%d) disabling watchdog on interface unclaim "
+          "for joint[%zu]='%s'; continuing",
+          disable_status,
+          i,
+          info_.joints[i].name.c_str());
       }
     }
 
