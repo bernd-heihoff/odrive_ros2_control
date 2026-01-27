@@ -667,8 +667,9 @@ CallbackReturn ODriveHardwareInterface::configure_from_info(
     }
   }
 
-  axis_faulted_.assign(joints_.size(), false);
-  idle_requested_on_fault_.assign(joints_.size(), false);
+  // Initialize all runtime state for the newly parsed joints/sensors.
+  // This keeps exported joint states TF-safe (finite) even before the first read().
+  reset_runtime_state();
 
   return CallbackReturn::SUCCESS;
 }
@@ -742,17 +743,37 @@ CallbackReturn ODriveHardwareInterface::on_deactivate(const rclcpp_lifecycle::St
     outputs_enabled_.store(false, std::memory_order_release);
   }
 
+  // Ensure transport_ is not reset while read()/write() is active.
+  std::unique_lock<std::shared_mutex> lock(state_mutex_);
+
   if (!transport_) {
     return CallbackReturn::SUCCESS;
   }
 
   constexpr std::int32_t requested_state = kAxisStateIdle;
-  for (const auto & joint : joints_) {
+  for (std::size_t i = 0; i < joints_.size() && i < info_.joints.size(); ++i) {
+    const auto & joint = joints_[i];
     const int status = transport_->write(
-      joint.serial_number, axis_endpoint(odrive::AXIS__REQUESTED_STATE, joint.axis),
+      joint.serial_number,
+      axis_endpoint(odrive::AXIS__REQUESTED_STATE, joint.axis),
       requested_state);
     if (status != 0) {
-      return to_callback_return(status, "requesting axis idle state");
+      // Deactivation should be best-effort: if the transport is already gone,
+      // we still want ros2_control to be able to transition cleanly.
+      RCUTILS_LOG_WARN_NAMED(
+        kLoggerName,
+        "Transport error (%d) while requesting axis idle state for joint[%zu]='%s' "
+        "(serial 0x%016" PRIx64 " axis %d). Continuing deactivation.",
+        status,
+        i,
+        info_.joints[i].name.c_str(),
+        static_cast<std::uint64_t>(joint.serial_number),
+        joint.axis);
+
+      // Drop the transport so subsequent read()/write() calls take the
+      // already-existing 'no transport' graceful path.
+      transport_.reset();
+      break;
     }
   }
 

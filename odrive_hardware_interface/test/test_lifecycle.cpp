@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "hardware_interface/hardware_info.hpp"
+#include "odrive_hardware_interface/axis_control.hpp"
 #include "odrive_hardware_interface/axis_utils.hpp"
 #include "odrive_hardware_interface/odrive_hardware_interface.hpp"
 #include "test_support/mock_transport.hpp"
@@ -678,6 +679,58 @@ TEST_F(LifecycleTest, OnDeactivateWithNullTransportSucceeds)
 
   ASSERT_EQ(CallbackReturn::SUCCESS, interface.configure(info));
   EXPECT_EQ(CallbackReturn::SUCCESS, interface.on_deactivate(rclcpp_lifecycle::State{}));
+}
+
+TEST_F(LifecycleTest, OnDeactivateWithTransportWriteErrorSucceeds)
+{
+  TestHardwareInterface interface;
+  interface.set_diagnostics_factory(make_fake_diagnostics_factory());
+
+  const std::int64_t serial = 0x00000000000000A3LL;
+  const int axis = 0;
+  const float torque_constant = 2.0F;
+
+  MockTransport * transport = nullptr;
+  interface.set_transport_factory(
+    [&]() {
+      auto instance = std::make_unique<MockTransport>();
+      transport = instance.get();
+      instance->expect_read(
+        serial,
+        axis_endpoint(odrive::AXIS__MOTOR__CONFIG__TORQUE_CONSTANT, axis),
+        torque_constant);
+      instance->expect_write(
+        serial,
+        axis_endpoint(odrive::AXIS__CONFIG__ENABLE_WATCHDOG, axis),
+        static_cast<bool>(false));
+      instance->expect_call(serial, axis_endpoint(odrive::AXIS__CLEAR_ERRORS, axis));
+
+      // Deactivation should still succeed even if the transport is already broken.
+      instance->expect_write(
+        serial,
+        axis_endpoint(odrive::AXIS__REQUESTED_STATE, axis),
+        static_cast<std::int32_t>(kAxisStateIdle),
+        -4);
+
+      return instance;
+    });
+
+  hardware_interface::HardwareInfo info;
+  info.hardware_parameters["publish_diagnostics"] = "false";
+
+  hardware_interface::ComponentInfo joint;
+  joint.name = "wheel";
+  joint.parameters["serial_number"] = "a3";
+  joint.parameters["axis"] = "0";
+  joint.parameters["watchdog_timeout"] = "0.10";
+  joint.parameters["enable_watchdog"] = "false";
+  info.joints.push_back(joint);
+
+  ASSERT_EQ(CallbackReturn::SUCCESS, interface.configure(info));
+  ASSERT_EQ(CallbackReturn::SUCCESS, interface.on_activate(rclcpp_lifecycle::State{}));
+  ASSERT_NE(nullptr, transport);
+  EXPECT_EQ(CallbackReturn::SUCCESS, interface.on_deactivate(rclcpp_lifecycle::State{}));
+  EXPECT_TRUE(transport->expectations_satisfied());
 }
 
 TEST_F(LifecycleTest, OnActivateSucceedsWhenHardwareAvailable)
