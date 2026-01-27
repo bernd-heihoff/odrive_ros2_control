@@ -50,6 +50,7 @@ namespace
 {
 constexpr const char kLoggerName[] = "ODriveHardwareInterface";
 constexpr const char * kDiagnosticsNodePrefix = "odrive_diagnostics_";
+constexpr std::uint32_t kAxisErrorWatchdogTimerExpired = 0x00000800U;
 
 DiagnosticsInterface::Duration seconds_to_duration(double seconds)
 {
@@ -309,6 +310,7 @@ void ODriveHardwareInterface::reset_runtime_state()
 
   axis_faulted_.assign(joints_.size(), false);
   idle_requested_on_fault_.assign(joints_.size(), false);
+  joint_claimed_.assign(joints_.size(), false);
 }
 
 CallbackReturn ODriveHardwareInterface::initialize_transport()
@@ -378,25 +380,18 @@ CallbackReturn ODriveHardwareInterface::initialize_transport()
       }
     }
 
+    // Do not arm/enable the watchdog during initialization. It is enabled on command interface
+    // claim (perform_command_mode_switch) to avoid false positives before a controller commands.
     const int write_enable_status = write_with_retry(
       *transport_,
       joint_context.serial_number,
       axis_endpoint(odrive::AXIS__CONFIG__ENABLE_WATCHDOG, joint_context.axis),
-      static_cast<bool>(joint_context.enable_watchdog),
+      static_cast<bool>(false),
       runtime_config_.usb_write_retries,
       std::chrono::milliseconds(runtime_config_.usb_retry_delay_ms),
       cycle_stats_.usb_write_retries_total);
     if (write_enable_status != 0) {
-      return to_callback_return(write_enable_status, "enabling watchdog");
-    }
-
-    if (joint_context.enable_watchdog) {
-      const int feed_status = transport_->call(
-        joint_context.serial_number,
-        axis_endpoint(odrive::AXIS__WATCHDOG_FEED, joint_context.axis));
-      if (feed_status != 0) {
-        return to_callback_return(feed_status, "feeding watchdog during initialization");
-      }
+      return to_callback_return(write_enable_status, "disabling watchdog during initialization");
     }
   }
 
@@ -716,15 +711,9 @@ CallbackReturn ODriveHardwareInterface::on_activate(const rclcpp_lifecycle::Stat
 
   std::fill(axis_faulted_.begin(), axis_faulted_.end(), false);
   std::fill(idle_requested_on_fault_.begin(), idle_requested_on_fault_.end(), false);
+  std::fill(joint_claimed_.begin(), joint_claimed_.end(), false);
 
   for (auto & joint : joints_) {
-    if (joint.enable_watchdog) {
-      const int feed_status = transport_->call(
-        joint.serial_number, axis_endpoint(odrive::AXIS__WATCHDOG_FEED, joint.axis));
-      if (feed_status != 0) {
-        return to_callback_return(feed_status, "feeding watchdog on activation");
-      }
-    }
     const int clear_status = transport_->call(
       joint.serial_number, axis_endpoint(odrive::AXIS__CLEAR_ERRORS, joint.axis));
     if (clear_status != 0) {
@@ -960,7 +949,92 @@ return_type ODriveHardwareInterface::perform_command_mode_switch(
     return return_type::OK;
   }
 
+  // Ensure claimed-state tracking is sized correctly (can be reset on (re)configure).
+  if (joint_claimed_.size() != joints_.size()) {
+    joint_claimed_.assign(joints_.size(), false);
+  }
+
   for (std::size_t i = 0; i < info_.joints.size(); i++) {
+    const bool was_claimed = (i < joint_claimed_.size()) ? joint_claimed_[i] : false;
+    const bool is_claimed = (joints_[i].control_level != AxisControlLevel::UNDEFINED);
+
+    // Claim transition: enable+feed watchdog once (if configured), then clear ONLY the
+    // pure watchdog-timer-expired axis fault so controllers can reclaim without a full
+    // deactivate/activate.
+    if (is_claimed && !was_claimed) {
+      if (joints_[i].enable_watchdog) {
+        const int enable_status = transport_->write(
+          joints_[i].serial_number,
+          axis_endpoint(odrive::AXIS__CONFIG__ENABLE_WATCHDOG, joints_[i].axis),
+          static_cast<bool>(true));
+        if (enable_status != 0) {
+          joints_[i].write_error = static_cast<double>(enable_status);
+          return to_io_return(enable_status, "enabling watchdog on interface claim");
+        }
+
+        const int feed_status = transport_->call(
+          joints_[i].serial_number,
+          axis_endpoint(odrive::AXIS__WATCHDOG_FEED, joints_[i].axis));
+        if (feed_status != 0) {
+          joints_[i].write_error = static_cast<double>(feed_status);
+          return to_io_return(feed_status, "feeding watchdog on interface claim");
+        }
+      }
+
+      std::int32_t axis_error_raw = 0;
+      const int read_error_status = transport_->read(
+        joints_[i].serial_number,
+        axis_endpoint(odrive::AXIS__ERROR, joints_[i].axis),
+        axis_error_raw);
+      if (read_error_status != 0) {
+        joints_[i].write_error = static_cast<double>(read_error_status);
+        return to_io_return(read_error_status, "reading axis error on interface claim");
+      }
+
+      const std::uint32_t axis_error = static_cast<std::uint32_t>(axis_error_raw);
+      joints_[i].axis_error = static_cast<double>(axis_error);
+
+      if (axis_error == kAxisErrorWatchdogTimerExpired) {
+        const int clear_status = transport_->call(
+          joints_[i].serial_number,
+          axis_endpoint(odrive::AXIS__CLEAR_ERRORS, joints_[i].axis));
+        if (clear_status != 0) {
+          joints_[i].write_error = static_cast<double>(clear_status);
+          return to_io_return(clear_status, "clearing pure watchdog expiry on interface claim");
+        }
+
+        // Reflect the clear locally so fault-masking doesn't block the immediate mode switch.
+        joints_[i].axis_error = 0.0;
+      }
+    }
+
+    // Unclaim transition: best-effort request IDLE and disable watchdog so it won't expire
+    // while no controller is commanding.
+    if (!is_claimed && was_claimed) {
+      constexpr std::int32_t requested_state = kAxisStateIdle;
+      const int idle_status = transport_->write(
+        joints_[i].serial_number,
+        axis_endpoint(odrive::AXIS__REQUESTED_STATE, joints_[i].axis),
+        requested_state);
+      if (idle_status != 0) {
+        RCUTILS_LOG_WARN_NAMED(
+          kLoggerName,
+          "Transport error (%d) requesting axis idle state on interface unclaim for joint[%zu]='%s'; continuing",
+          idle_status, i, info_.joints[i].name.c_str());
+      }
+
+      const int disable_status = transport_->write(
+        joints_[i].serial_number,
+        axis_endpoint(odrive::AXIS__CONFIG__ENABLE_WATCHDOG, joints_[i].axis),
+        static_cast<bool>(false));
+      if (disable_status != 0) {
+        RCUTILS_LOG_WARN_NAMED(
+          kLoggerName,
+          "Transport error (%d) disabling watchdog on interface unclaim for joint[%zu]='%s'; continuing",
+          disable_status, i, info_.joints[i].name.c_str());
+      }
+    }
+
     const bool has_fault = safety_config_.mask_faulted_axes &&
       (extract_error_value(joints_[i].axis_error).has_value() ||
       extract_error_value(joints_[i].motor_error).has_value() ||
@@ -968,6 +1042,9 @@ return_type ODriveHardwareInterface::perform_command_mode_switch(
       extract_error_value(joints_[i].controller_error).has_value());
     if (has_fault) {
       joints_[i].control_level = AxisControlLevel::UNDEFINED;
+      if (i < joint_claimed_.size()) {
+        joint_claimed_[i] = false;
+      }
       continue;
     }
 
@@ -995,6 +1072,10 @@ return_type ODriveHardwareInterface::perform_command_mode_switch(
     }
 
     joints_[i].write_error = 0.0;
+
+    if (i < joint_claimed_.size()) {
+      joint_claimed_[i] = (joints_[i].control_level != AxisControlLevel::UNDEFINED);
+    }
   }
 
   return return_type::OK;

@@ -260,6 +260,10 @@ private:
   std::vector<bool> axis_faulted_;
   std::vector<bool> idle_requested_on_fault_;
 
+  // Tracks whether a joint's command interfaces are currently claimed.
+  // Used to detect claim/unclaim transitions during command mode switches.
+  std::vector<bool> joint_claimed_;
+
   struct DiagnosticsConfig
   {
     bool enabled{true};
