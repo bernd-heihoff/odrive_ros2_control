@@ -22,6 +22,20 @@ ament_target_dependencies(
 	rclcpp
 )
 
+target_include_directories(
+	odrive_ros2_control_ros_diagnostics
+	PUBLIC
+	$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+	$<INSTALL_INTERFACE:include>
+)
+
+install(
+	TARGETS odrive_ros2_control_ros_diagnostics
+	ARCHIVE DESTINATION lib
+	LIBRARY DESTINATION lib
+	RUNTIME DESTINATION bin
+)
+
 install(
 	DIRECTORY include/
 	DESTINATION include
@@ -29,4 +43,13 @@ install(
 
 pluginlib_export_plugin_description_file(hardware_interface odrive_hardware_interface.xml)
 
-ament_auto_package()
+ament_export_dependencies(
+	diagnostic_updater
+	odrive_hardware_interface
+	pluginlib
+	rclcpp
+)
+ament_export_include_directories(include)
+ament_export_libraries(odrive_ros2_control_ros_diagnostics)
+
+ament_package()
