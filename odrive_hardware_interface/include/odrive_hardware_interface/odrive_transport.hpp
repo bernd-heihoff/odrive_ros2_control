@@ -39,6 +39,12 @@ public:
 
   virtual ~ODriveTransport() = default;
 
+  /// Set transport-specific operation timeout.
+  ///
+  /// Default implementation is a no-op to preserve compatibility for transports
+  /// that do not support configurable timeouts.
+  virtual void set_timeout_ms(unsigned int /* timeout_ms */) {}
+
   /// Initialize transport and discover ODrive devices.
   ///
   /// @param serial_numbers Matrix of serial numbers organized by bus/device hierarchy.

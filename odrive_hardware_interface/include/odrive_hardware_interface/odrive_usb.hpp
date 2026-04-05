@@ -20,6 +20,7 @@
 #include <cstring>
 #include <iostream>
 #include <map>
+#include <atomic>
 #include <vector>
 
 #include "odrive_hardware_interface/odrive_endpoints.hpp"
@@ -44,6 +45,8 @@ public:
   ODriveUSB();
   ~ODriveUSB();
 
+  void set_timeout_ms(unsigned int timeout_ms) override;
+
   int initialize(const SerialMatrix & serial_numbers) override;
   int call(std::int64_t serial_number, std::int16_t endpoint_id) override;
 
@@ -53,6 +56,9 @@ private:
   std::map<std::int64_t, libusb_device_handle *> odrive_map_;
 
   std::int16_t sequence_number_;
+
+  std::atomic<int> sticky_error_{0};
+  unsigned int usb_timeout_ms_{100};
 
   template<typename T>
   int read(libusb_device_handle * odrive_handle, std::int16_t endpoint_id, T & value);

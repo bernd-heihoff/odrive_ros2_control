@@ -333,6 +333,9 @@ CallbackReturn ODriveHardwareInterface::initialize_transport()
     return CallbackReturn::ERROR;
   }
 
+  // Propagate runtime-configured timeout (if supported by transport).
+  transport_->set_timeout_ms(runtime_config_.usb_timeout_ms);
+
   ODriveTransport::SerialMatrix serial_numbers(2);
   serial_numbers[0].reserve(sensors_.size());
   for (const auto & sensor : sensors_) {
@@ -1395,6 +1398,25 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
 {
   auto start_time = std::chrono::steady_clock::now();
 
+  const auto is_fail_fast_transport_error = [](int status) -> bool {
+      return status == LIBUSB_ERROR_TIMEOUT || status == LIBUSB_ERROR_NO_DEVICE;
+    };
+
+  const auto mark_all_unhealthy_and_hold = [this](int status, const char * context) {
+      RCUTILS_LOG_ERROR_THROTTLE_NAMED(
+        RCUTILS_STEADY_TIME, runtime_config_.log_throttle_ms, kLoggerName,
+        "Fail-fast transport error (%d) during %s; marking all joints unhealthy",
+        status, context);
+      for (auto & joint : joints_) {
+        joint.healthy = 0.0;
+        joint.telemetry_valid = 0.0;
+        hold_joint_state(joint);
+      }
+      for (auto & sensor : sensors_) {
+        sensor.vbus_voltage = std::numeric_limits<double>::quiet_NaN();
+      }
+    };
+
   // Use shared lock - read() only modifies state_, not command interfaces
   // This allows diagnostics callbacks to run concurrently during read()
   std::shared_lock<std::shared_mutex> lock(state_mutex_);
@@ -1440,6 +1462,12 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
     {
       sensors_[i].transport_error = static_cast<double>(status);
       sensors_[i].vbus_voltage = std::numeric_limits<double>::quiet_NaN();
+
+      if (is_fail_fast_transport_error(status)) {
+        mark_all_unhealthy_and_hold(status, "reading vbus voltage");
+        return return_type::OK;
+      }
+
       RCUTILS_LOG_WARN_THROTTLE_NAMED(
         RCUTILS_STEADY_TIME, runtime_config_.log_throttle_ms, kLoggerName,
         "Transport error (%d) reading vbus voltage for sensor[%zu] "
@@ -1459,6 +1487,12 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
     if (status != 0) {
       drive.can_error_read_error = static_cast<double>(status);
       drive.can_error = 0;
+
+      if (is_fail_fast_transport_error(status)) {
+        mark_all_unhealthy_and_hold(status, "reading CAN error");
+        return return_type::OK;
+      }
+
       continue;
     }
     drive.can_error_read_error = 0.0;
@@ -1478,6 +1512,11 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
         failing_stage);
       status != 0)
     {
+      if (is_fail_fast_transport_error(status)) {
+        mark_all_unhealthy_and_hold(status, "reading axis telemetry");
+        return return_type::OK;
+      }
+
       if (const auto sensor_index = find_sensor_index(joints_[i].serial_number)) {
         sensors_[*sensor_index].transport_error = static_cast<double>(status);
       }
@@ -1654,6 +1693,10 @@ return_type ODriveHardwareInterface::write(
 {
   auto start_time = std::chrono::steady_clock::now();
 
+  const auto is_fail_fast_transport_error = [](int status) -> bool {
+      return status == LIBUSB_ERROR_TIMEOUT || status == LIBUSB_ERROR_NO_DEVICE;
+    };
+
   // Use unique lock - write() modifies state and must have exclusive access
   // This blocks all readers (diagnostics) and other writers during command transmission
   std::unique_lock<std::shared_mutex> lock(state_mutex_);
@@ -1828,6 +1871,16 @@ return_type ODriveHardwareInterface::write(
           requested_state);
         if (status != 0) {
           joints_[i].write_error = static_cast<double>(status);
+
+          if (is_fail_fast_transport_error(status)) {
+            transport_.reset();
+            RCUTILS_LOG_ERROR_THROTTLE_NAMED(
+              RCUTILS_STEADY_TIME, runtime_config_.log_throttle_ms, kLoggerName,
+              "Fail-fast transport error (%d) requesting axis idle state; transport dropped",
+              status);
+            return return_type::OK;
+          }
+
           RCUTILS_LOG_WARN_THROTTLE_NAMED(
             RCUTILS_STEADY_TIME, runtime_config_.log_throttle_ms, kLoggerName,
             "Transport error (%d) requesting axis idle state after fault "
@@ -1873,6 +1926,16 @@ return_type ODriveHardwareInterface::write(
         "writing axis command (" + failing_stage + ")";
 
       joints_[i].write_error = static_cast<double>(status);
+
+      if (is_fail_fast_transport_error(status)) {
+        transport_.reset();
+        RCUTILS_LOG_ERROR_THROTTLE_NAMED(
+          RCUTILS_STEADY_TIME, runtime_config_.log_throttle_ms, kLoggerName,
+          "Fail-fast transport error (%d) %s; transport dropped",
+          status, action.c_str());
+        return return_type::OK;
+      }
+
       RCUTILS_LOG_WARN_THROTTLE_NAMED(
         RCUTILS_STEADY_TIME, config_limits::DEFAULT_LOG_THROTTLE_MS, kLoggerName,
         "Transport error (%d) %s for joint[%zu]='%s' (serial 0x%016" PRIx64 " axis %d); "

@@ -24,7 +24,6 @@ namespace odrive
 {
 namespace
 {
-constexpr unsigned int kUsbTimeoutMs = 100;
 namespace
 {
 constexpr std::uint64_t kUsbWarnThrottleMs = 1000;
@@ -58,9 +57,16 @@ ODriveUSB::~ODriveUSB()
   }
 }
 
+void ODriveUSB::set_timeout_ms(unsigned int timeout_ms)
+{
+  // libusb treats 0 as "infinite"; avoid that for real-time-ish control loops.
+  usb_timeout_ms_ = (timeout_ms == 0U) ? 1U : timeout_ms;
+}
+
 int ODriveUSB::initialize(const SerialMatrix & serial_numbers)
 {
   sequence_number_ = 0;
+  sticky_error_.store(0, std::memory_order_release);
   int ret = libusb_init(&libusb_context_);
   if (ret != LIBUSB_SUCCESS) {
     return ret;
@@ -220,6 +226,11 @@ int ODriveUSB::endpointOperation(
   libusb_device_handle * odrive_handle, std::int16_t endpoint_id, std::int16_t response_size,
   bytes request_payload, bytes & response_payload, bool expect_response)
 {
+  const int sticky = sticky_error_.load(std::memory_order_acquire);
+  if (sticky != 0) {
+    return sticky;
+  }
+
   int transferred = 0;
   bytes response_packet;
   unsigned char response_data[ODRIVE_MAX_PACKET_SIZE] = {0};
@@ -237,8 +248,11 @@ int ODriveUSB::endpointOperation(
 
   int ret = libusb_bulk_transfer(
     odrive_handle, ODRIVE_OUT_ENDPOINT, request_packet.data(), request_packet.size(), &transferred,
-    kUsbTimeoutMs);
+    static_cast<unsigned int>(usb_timeout_ms_));
   if (ret != LIBUSB_SUCCESS) {
+    if (ret == LIBUSB_ERROR_TIMEOUT || ret == LIBUSB_ERROR_NO_DEVICE) {
+      sticky_error_.store(ret, std::memory_order_release);
+    }
     if (ret == LIBUSB_ERROR_NO_DEVICE) {
       RCUTILS_LOG_WARN_THROTTLE_NAMED(
         RCUTILS_STEADY_TIME, kUsbErrorThrottleMs, kUsbLogger,
@@ -260,8 +274,11 @@ int ODriveUSB::endpointOperation(
   if (expect_response) {
     ret = libusb_bulk_transfer(
       odrive_handle, ODRIVE_IN_ENDPOINT, response_data, ODRIVE_MAX_PACKET_SIZE, &transferred,
-      kUsbTimeoutMs);
+      static_cast<unsigned int>(usb_timeout_ms_));
     if (ret != LIBUSB_SUCCESS) {
+      if (ret == LIBUSB_ERROR_TIMEOUT || ret == LIBUSB_ERROR_NO_DEVICE) {
+        sticky_error_.store(ret, std::memory_order_release);
+      }
       if (ret == LIBUSB_ERROR_NO_DEVICE) {
         RCUTILS_LOG_WARN_THROTTLE_NAMED(
           RCUTILS_STEADY_TIME, kUsbErrorThrottleMs, kUsbLogger,
