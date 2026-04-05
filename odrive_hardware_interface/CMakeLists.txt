@@ -112,6 +112,12 @@ if(BUILD_TESTING)
     target_link_libraries(test_command_safety ${PROJECT_NAME})
   endif()
 
+  ament_add_gtest(test_command_sequence_gating test/test_command_sequence_gating.cpp)
+  if(TARGET test_command_sequence_gating)
+    target_include_directories(test_command_sequence_gating PRIVATE ${TEST_INCLUDE_DIR})
+    target_link_libraries(test_command_sequence_gating ${PROJECT_NAME})
+  endif()
+
   ament_add_gtest(test_lifecycle test/test_lifecycle.cpp)
   if(TARGET test_lifecycle)
     target_include_directories(test_lifecycle PRIVATE ${TEST_INCLUDE_DIR})

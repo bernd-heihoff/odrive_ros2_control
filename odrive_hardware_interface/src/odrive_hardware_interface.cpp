@@ -51,6 +51,7 @@ namespace
 constexpr const char kLoggerName[] = "ODriveHardwareInterface";
 constexpr const char * kDiagnosticsNodePrefix = "odrive_diagnostics_";
 constexpr std::uint32_t kAxisErrorWatchdogTimerExpired = 0x00000800U;
+constexpr const char * kCommandSequenceInterface = "odrive_command_seq";
 
 DiagnosticsInterface::Duration seconds_to_duration(double seconds)
 {
@@ -279,6 +280,9 @@ void ODriveHardwareInterface::reset_runtime_state()
     joint.command_position = joint.position;
     joint.command_velocity = 0.0;
     joint.command_effort = 0.0;
+
+    joint.command_sequence = 0.0;
+    joint.last_sent_command_sequence = std::numeric_limits<double>::quiet_NaN();
 
     joint.last_command_position = joint.command_position;
     joint.last_command_velocity = joint.command_velocity;
@@ -602,6 +606,19 @@ CallbackReturn ODriveHardwareInterface::configure_from_info(
       }
       safety_config_.request_idle_on_axis_fault = parsed;
     }
+
+    bool_it = params.find("gate_stale_commands_with_command_sequence");
+    if (bool_it != params.end()) {
+      bool parsed = safety_config_.gate_stale_commands_with_command_sequence;
+      if (!try_parse_bool(bool_it->second, parsed)) {
+        RCUTILS_LOG_ERROR_NAMED(
+          kLoggerName,
+          "Invalid 'gate_stale_commands_with_command_sequence' value '%s'",
+          bool_it->second.c_str());
+        return CallbackReturn::ERROR;
+      }
+      safety_config_.gate_stale_commands_with_command_sequence = parsed;
+    }
   }
 
   {
@@ -906,6 +923,10 @@ ODriveHardwareInterface::export_command_interfaces()
     command_interfaces.emplace_back(
       hardware_interface::CommandInterface(
         info_.joints[i].name, hardware_interface::HW_IF_POSITION, &joints_[i].command_position));
+
+    command_interfaces.emplace_back(
+      hardware_interface::CommandInterface(
+        info_.joints[i].name, kCommandSequenceInterface, &joints_[i].command_sequence));
   }
 
   return command_interfaces;
@@ -1837,6 +1858,7 @@ return_type ODriveHardwareInterface::write(
     cmd.command_velocity.resize(joints_.size());
     cmd.command_effort.resize(joints_.size());
     cmd.control_level.resize(joints_.size());
+    cmd.command_sequence.resize(joints_.size());
 
     {
       std::shared_lock<std::shared_mutex> lock(state_mutex_);
@@ -1845,6 +1867,7 @@ return_type ODriveHardwareInterface::write(
         cmd.command_velocity[i] = joints_[i].command_velocity;
         cmd.command_effort[i] = joints_[i].command_effort;
         cmd.control_level[i] = joints_[i].control_level;
+        cmd.command_sequence[i] = joints_[i].command_sequence;
       }
     }
 
@@ -2072,6 +2095,15 @@ return_type ODriveHardwareInterface::write(
       idle_requested_on_fault_[i] = false;
     }
 
+    if (safety_config_.gate_stale_commands_with_command_sequence) {
+      const double seq = joints_[i].command_sequence;
+      if (!std::isfinite(seq) || seq == joints_[i].last_sent_command_sequence) {
+        // Stale: do not write setpoints and do not feed watchdog.
+        joints_[i].write_error = 0.0;
+        continue;
+      }
+    }
+
     // Write commands and feed watchdog (if enabled).
     // Note: Watchdog feed is intentionally tied to command writes to detect
     // control loop failures. If commands stop (lifecycle gating, fault masking),
@@ -2117,6 +2149,10 @@ return_type ODriveHardwareInterface::write(
     }
 
     joints_[i].write_error = 0.0;
+
+    if (safety_config_.gate_stale_commands_with_command_sequence) {
+      joints_[i].last_sent_command_sequence = joints_[i].command_sequence;
+    }
 
     // Update last command values for next cycle's rate limiting
     joints_[i].last_command_position = command_state.command_position;
@@ -2169,6 +2205,7 @@ void ODriveHardwareInterface::async_io_init_buffers()
   async_latest_command_.command_velocity.assign(joints_.size(), 0.0);
   async_latest_command_.command_effort.assign(joints_.size(), 0.0);
   async_latest_command_.control_level.assign(joints_.size(), AxisControlLevel::UNDEFINED);
+  async_latest_command_.command_sequence.assign(joints_.size(), 0.0);
 
   async_latest_telemetry_.stamp = std::chrono::steady_clock::time_point{};
   async_latest_telemetry_.transport_ok = static_cast<bool>(transport_);
@@ -2204,6 +2241,7 @@ void ODriveHardwareInterface::async_io_init_buffers()
   async_last_command_position_.assign(n, std::numeric_limits<double>::quiet_NaN());
   async_last_command_velocity_.assign(n, std::numeric_limits<double>::quiet_NaN());
   async_last_command_effort_.assign(n, std::numeric_limits<double>::quiet_NaN());
+  async_last_sent_command_sequence_.assign(n, std::numeric_limits<double>::quiet_NaN());
   async_last_valid_position_.assign(n, 0.0);
   async_last_valid_velocity_.assign(n, 0.0);
   async_axis_faulted_.assign(n, false);
@@ -2689,6 +2727,16 @@ void ODriveHardwareInterface::async_io_thread_main()
             command_state.command_effort *= -1.0;
           }
 
+          if (safety_config_.gate_stale_commands_with_command_sequence) {
+            const double seq = (i < command.command_sequence.size()) ?
+              command.command_sequence[i] : std::numeric_limits<double>::quiet_NaN();
+            if (!std::isfinite(seq) || seq == async_last_sent_command_sequence_[i]) {
+              // Stale: do not write setpoints and do not feed watchdog.
+              snapshot.joint_write_error[i] = 0.0;
+              continue;
+            }
+          }
+
           std::string failing_stage;
           const int status = write_axis_command(
             *transport_,
@@ -2712,6 +2760,12 @@ void ODriveHardwareInterface::async_io_thread_main()
           async_last_command_position_[i] = command_state.command_position;
           async_last_command_velocity_[i] = command_state.command_velocity;
           async_last_command_effort_[i] = command_state.command_effort;
+
+          if (safety_config_.gate_stale_commands_with_command_sequence) {
+            async_last_sent_command_sequence_[i] =
+              (i < command.command_sequence.size()) ? command.command_sequence[i] :
+              std::numeric_limits<double>::quiet_NaN();
+          }
         }
       }
     }

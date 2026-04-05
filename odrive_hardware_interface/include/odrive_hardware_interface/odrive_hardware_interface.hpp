@@ -120,6 +120,16 @@ private:
     bool mask_faulted_axes{true};
     // When true, a faulted axis is transitioned to IDLE once when a fault is detected.
     bool request_idle_on_axis_fault{true};
+
+    // When true, command writes are gated by a controller-provided command sequence.
+    // A joint's setpoints (and watchdog feed) are only written when its command sequence
+    // changes since the last successful write.
+    //
+    // SAFETY RATIONALE:
+    // This prevents the I/O thread from replaying stale setpoints and keeps the watchdog
+    // behavior aligned with active control. If controllers stop updating the sequence,
+    // commands stop and the ODrive watchdog can expire.
+    bool gate_stale_commands_with_command_sequence{false};
   };
 
   struct RuntimeConfig
@@ -171,6 +181,10 @@ private:
     std::vector<double> command_velocity;
     std::vector<double> command_effort;
     std::vector<AxisControlLevel> control_level;
+
+    // Per-joint freshness token written by controllers.
+    // Only used when SafetyConfig::gate_stale_commands_with_command_sequence is true.
+    std::vector<double> command_sequence;
   };
 
   struct AsyncTelemetrySnapshot
@@ -283,6 +297,12 @@ private:
     double command_position{std::numeric_limits<double>::quiet_NaN()};
     double command_velocity{std::numeric_limits<double>::quiet_NaN()};
     double command_effort{std::numeric_limits<double>::quiet_NaN()};
+
+    // Controller-provided freshness token for command gating.
+    // When SafetyConfig::gate_stale_commands_with_command_sequence is enabled, a command is
+    // only written (and watchdog fed) when command_sequence changes vs last_sent_command_sequence.
+    double command_sequence{0.0};
+    double last_sent_command_sequence{std::numeric_limits<double>::quiet_NaN()};
 
     double position{std::numeric_limits<double>::quiet_NaN()};
     double velocity{std::numeric_limits<double>::quiet_NaN()};
@@ -401,6 +421,7 @@ private:
   std::vector<double> async_last_command_position_;
   std::vector<double> async_last_command_velocity_;
   std::vector<double> async_last_command_effort_;
+  std::vector<double> async_last_sent_command_sequence_;
   std::vector<double> async_last_valid_position_;
   std::vector<double> async_last_valid_velocity_;
   std::vector<bool> async_axis_faulted_;
