@@ -333,11 +333,6 @@ int write_axis_command(
       }
 
     case AxisControlLevel::UNDEFINED: {
-        if (enable_watchdog) {
-          const int status = call_axis("feeding watchdog", odrive::AXIS__WATCHDOG_FEED);
-          failing_stage.clear();
-          return status;
-        }
         failing_stage.clear();
         return 0;
       }

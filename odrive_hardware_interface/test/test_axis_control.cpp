@@ -156,7 +156,7 @@ TEST(AxisControlTest, WriteVelocityCommandConvertsUnits)
   EXPECT_TRUE(transport.expectations_satisfied());
 }
 
-TEST(AxisControlTest, WriteCommandFeedsWatchdogWhenUndefined)
+TEST(AxisControlTest, WriteCommandDoesNotFeedWatchdogWhenUndefined)
 {
   MockTransport transport;
   double command_pos = 0.0;
@@ -173,9 +173,6 @@ TEST(AxisControlTest, WriteCommandFeedsWatchdogWhenUndefined)
     state_pos,
     state_vel,
     state_eff};
-
-  const auto watchdog_endpoint = axis_endpoint(odrive::AXIS__WATCHDOG_FEED, kAxis);
-  transport.expect_call(kSerial, watchdog_endpoint);
 
   std::string failing_stage;
   const int status = write_axis_command(

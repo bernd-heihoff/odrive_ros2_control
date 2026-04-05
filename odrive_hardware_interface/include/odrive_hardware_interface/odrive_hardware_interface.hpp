@@ -24,6 +24,7 @@
 #include <mutex>
 #include <optional>
 #include <shared_mutex>
+#include <condition_variable>
 #include <string>
 #include <thread>
 #include <vector>
@@ -142,6 +143,81 @@ private:
     double max_read_cycle_time_sec{0.010};   // 10ms
     double max_write_cycle_time_sec{0.010};  // 10ms
     bool enable_deadline_warnings{true};
+
+    // When true, USB I/O is performed on a worker thread.
+    // read()/write() become bounded-time snapshot exchange.
+    bool enable_async_io{false};
+
+    // Deadline for a single async I/O cycle (read+write). If exceeded,
+    // read() will report joints unhealthy even if the last snapshot is old.
+    double async_cycle_deadline_sec{0.015};
+  };
+
+  struct AsyncJointStatic
+  {
+    std::int64_t serial_number{0};
+    int axis{0};
+    bool invert_axis{false};
+    bool enable_watchdog{false};
+    float torque_constant{std::numeric_limits<float>::quiet_NaN()};
+    JointConfig::CommandLimits command_limits;
+    JointConfig::FeedbackLimits feedback_limits;
+  };
+
+  struct AsyncCommandSnapshot
+  {
+    double dt_s{0.0};
+    std::vector<double> command_position;
+    std::vector<double> command_velocity;
+    std::vector<double> command_effort;
+    std::vector<AxisControlLevel> control_level;
+  };
+
+  struct AsyncTelemetrySnapshot
+  {
+    std::chrono::steady_clock::time_point stamp;
+    bool transport_ok{false};
+    int transport_error{0};
+
+    std::vector<double> sensor_vbus_voltage;
+    std::vector<double> sensor_transport_error;
+
+    std::vector<std::uint32_t> drive_can_error;
+    std::vector<double> drive_can_error_read_error;
+
+    std::vector<double> joint_position;
+    std::vector<double> joint_velocity;
+    std::vector<double> joint_effort;
+
+    std::vector<double> joint_axis_error;
+    std::vector<double> joint_motor_error;
+    std::vector<double> joint_encoder_error;
+    std::vector<double> joint_controller_error;
+    std::vector<double> joint_fet_temperature;
+    std::vector<double> joint_motor_temperature;
+
+    std::vector<double> joint_read_error;
+    std::vector<double> joint_write_error;
+    std::vector<double> joint_telemetry_valid;
+    std::vector<double> joint_healthy;
+
+    std::vector<double> joint_position_rate_limited;
+    std::vector<double> joint_velocity_rate_limited;
+    std::vector<double> joint_effort_rate_limited;
+
+    struct AsyncCycleStats
+    {
+      std::size_t read_cycles{0};
+      std::size_t write_cycles{0};
+      std::size_t read_deadline_misses{0};
+      std::size_t write_deadline_misses{0};
+      double max_read_cycle_time_sec{0.0};
+      double max_write_cycle_time_sec{0.0};
+      std::size_t usb_read_retries_total{0};
+      std::size_t usb_write_retries_total{0};
+      std::size_t command_validation_failures{0};
+      std::size_t rate_limit_events{0};
+    } cycle_stats;
   };
 
   CallbackReturn initialize_transport();
@@ -305,5 +381,36 @@ private:
   std::vector<SensorContext> sensors_;
   std::vector<DriveContext> drives_;
   std::vector<JointContext> joints_;
+
+  // Async I/O worker state (only used when runtime_config_.enable_async_io is true)
+  std::thread async_io_thread_;
+  std::mutex async_io_mutex_;
+  std::condition_variable async_io_cv_;
+  bool async_io_stop_{false};
+  bool async_io_request_pending_{false};
+
+  // Tracks whether the worker is currently inside a transport cycle.
+  bool async_cycle_in_flight_{false};
+  std::chrono::steady_clock::time_point async_cycle_start_;
+
+  std::vector<AsyncJointStatic> async_joint_static_;
+  AsyncCommandSnapshot async_latest_command_;
+  AsyncTelemetrySnapshot async_latest_telemetry_;
+
+  // Worker-side state for rate limiting/fault tracking.
+  std::vector<double> async_last_command_position_;
+  std::vector<double> async_last_command_velocity_;
+  std::vector<double> async_last_command_effort_;
+  std::vector<double> async_last_valid_position_;
+  std::vector<double> async_last_valid_velocity_;
+  std::vector<bool> async_axis_faulted_;
+  std::vector<bool> async_idle_requested_on_fault_;
+
+  void async_io_thread_main();
+  void async_io_start();
+  void async_io_stop_and_join();
+  void async_io_init_buffers();
+  void async_io_publish_snapshot(AsyncTelemetrySnapshot && snapshot);
+  bool async_io_should_report_deadline_miss(const std::chrono::steady_clock::time_point & now);
 };
 }  // namespace odrive_hardware_interface

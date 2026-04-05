@@ -234,6 +234,7 @@ ODriveHardwareInterface::ODriveHardwareInterface()
 
 ODriveHardwareInterface::~ODriveHardwareInterface()
 {
+  async_io_stop_and_join();
 }
 
 void ODriveHardwareInterface::set_transport_factory(TransportFactory factory)
@@ -543,6 +544,32 @@ CallbackReturn ODriveHardwareInterface::configure_from_info(
       }
     }
 
+    auto async_it = params.find("enable_async_io");
+    if (async_it != params.end()) {
+      bool parsed = runtime_config_.enable_async_io;
+      if (try_parse_bool(async_it->second, parsed)) {
+        runtime_config_.enable_async_io = parsed;
+      } else {
+        RCUTILS_LOG_WARN_NAMED(
+          kLoggerName,
+          "Invalid enable_async_io '%s'; keeping default",
+          async_it->second.c_str());
+      }
+    }
+
+    auto async_deadline_it = params.find("async_cycle_deadline_sec");
+    if (async_deadline_it != params.end()) {
+      double parsed = runtime_config_.async_cycle_deadline_sec;
+      if (try_parse_double(async_deadline_it->second, parsed) && parsed > 0.0) {
+        runtime_config_.async_cycle_deadline_sec = parsed;
+      } else {
+        RCUTILS_LOG_WARN_NAMED(
+          kLoggerName,
+          "Invalid async_cycle_deadline_sec '%s'; keeping default",
+          async_deadline_it->second.c_str());
+      }
+    }
+
     auto bool_it = params.find("gate_outputs_with_lifecycle");
     if (bool_it != params.end()) {
       bool parsed = safety_config_.gate_outputs_with_lifecycle;
@@ -724,11 +751,18 @@ CallbackReturn ODriveHardwareInterface::on_activate(const rclcpp_lifecycle::Stat
     }
   }
 
+  if (runtime_config_.enable_async_io) {
+    async_io_init_buffers();
+    async_io_start();
+  }
+
   return CallbackReturn::SUCCESS;
 }
 
 CallbackReturn ODriveHardwareInterface::on_deactivate(const rclcpp_lifecycle::State &)
 {
+  async_io_stop_and_join();
+
   if (safety_config_.gate_outputs_with_lifecycle) {
     // Atomic store with release semantics ensures deactivation is visible
     // to write() thread before it checks the flag
@@ -774,6 +808,7 @@ CallbackReturn ODriveHardwareInterface::on_deactivate(const rclcpp_lifecycle::St
 
 CallbackReturn ODriveHardwareInterface::on_cleanup(const rclcpp_lifecycle::State &)
 {
+  async_io_stop_and_join();
   transport_.reset();
   reset_runtime_state();
   return CallbackReturn::SUCCESS;
@@ -781,6 +816,7 @@ CallbackReturn ODriveHardwareInterface::on_cleanup(const rclcpp_lifecycle::State
 
 CallbackReturn ODriveHardwareInterface::recover()
 {
+  async_io_stop_and_join();
   reset_runtime_state();
   transport_.reset();
   return CallbackReturn::SUCCESS;
@@ -948,6 +984,23 @@ return_type ODriveHardwareInterface::prepare_command_mode_switch(
 return_type ODriveHardwareInterface::perform_command_mode_switch(
   const std::vector<std::string> &, const std::vector<std::string> &)
 {
+  const bool restart_async_after = runtime_config_.enable_async_io && async_io_thread_.joinable();
+  struct RestartAsyncGuard
+  {
+    ODriveHardwareInterface * self;
+    bool restart;
+    ~RestartAsyncGuard()
+    {
+      if (restart) {
+        self->async_io_start();
+      }
+    }
+  } restart_guard{this, restart_async_after};
+
+  if (restart_async_after) {
+    async_io_stop_and_join();
+  }
+
   if (!transport_) {
     return return_type::OK;
   }
@@ -1396,6 +1449,86 @@ void ODriveHardwareInterface::maybe_update_diagnostics()
 
 return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Duration &)
 {
+  if (runtime_config_.enable_async_io) {
+    const auto now = std::chrono::steady_clock::now();
+
+    AsyncTelemetrySnapshot snapshot;
+    bool deadline_miss = false;
+    bool in_flight = false;
+    std::chrono::steady_clock::time_point in_flight_since;
+    {
+      std::unique_lock<std::mutex> lock(async_io_mutex_);
+      snapshot = async_latest_telemetry_;
+      in_flight = async_cycle_in_flight_;
+      in_flight_since = async_cycle_start_;
+    }
+
+    if (in_flight) {
+      const double age_s = std::chrono::duration<double>(now - in_flight_since).count();
+      deadline_miss = age_s > runtime_config_.async_cycle_deadline_sec;
+    }
+
+    if (deadline_miss) {
+      snapshot.transport_ok = false;
+      for (auto & h : snapshot.joint_healthy) {
+        h = 0.0;
+      }
+      for (auto & tv : snapshot.joint_telemetry_valid) {
+        tv = 0.0;
+      }
+    }
+
+    {
+      std::unique_lock<std::shared_mutex> lock(state_mutex_);
+
+      for (std::size_t i = 0; i < sensors_.size() && i < snapshot.sensor_vbus_voltage.size(); ++i) {
+        sensors_[i].vbus_voltage = snapshot.sensor_vbus_voltage[i];
+        sensors_[i].transport_error = snapshot.sensor_transport_error[i];
+      }
+
+      for (std::size_t i = 0; i < drives_.size() && i < snapshot.drive_can_error.size(); ++i) {
+        drives_[i].can_error = snapshot.drive_can_error[i];
+        drives_[i].can_error_read_error = snapshot.drive_can_error_read_error[i];
+      }
+
+      for (std::size_t i = 0; i < joints_.size() && i < snapshot.joint_position.size(); ++i) {
+        joints_[i].position = snapshot.joint_position[i];
+        joints_[i].velocity = snapshot.joint_velocity[i];
+        joints_[i].effort = snapshot.joint_effort[i];
+
+        joints_[i].axis_error = snapshot.joint_axis_error[i];
+        joints_[i].motor_error = snapshot.joint_motor_error[i];
+        joints_[i].encoder_error = snapshot.joint_encoder_error[i];
+        joints_[i].controller_error = snapshot.joint_controller_error[i];
+        joints_[i].fet_temperature = snapshot.joint_fet_temperature[i];
+        joints_[i].motor_temperature = snapshot.joint_motor_temperature[i];
+
+        joints_[i].read_error = snapshot.joint_read_error[i];
+        joints_[i].write_error = snapshot.joint_write_error[i];
+        joints_[i].telemetry_valid = snapshot.joint_telemetry_valid[i];
+        joints_[i].healthy = snapshot.joint_healthy[i];
+
+        joints_[i].position_rate_limited = snapshot.joint_position_rate_limited[i];
+        joints_[i].velocity_rate_limited = snapshot.joint_velocity_rate_limited[i];
+        joints_[i].effort_rate_limited = snapshot.joint_effort_rate_limited[i];
+      }
+
+      cycle_stats_.read_cycles = snapshot.cycle_stats.read_cycles;
+      cycle_stats_.write_cycles = snapshot.cycle_stats.write_cycles;
+      cycle_stats_.read_deadline_misses = snapshot.cycle_stats.read_deadline_misses;
+      cycle_stats_.write_deadline_misses = snapshot.cycle_stats.write_deadline_misses;
+      cycle_stats_.max_read_cycle_time_sec = snapshot.cycle_stats.max_read_cycle_time_sec;
+      cycle_stats_.max_write_cycle_time_sec = snapshot.cycle_stats.max_write_cycle_time_sec;
+      cycle_stats_.usb_read_retries_total = snapshot.cycle_stats.usb_read_retries_total;
+      cycle_stats_.usb_write_retries_total = snapshot.cycle_stats.usb_write_retries_total;
+      cycle_stats_.command_validation_failures = snapshot.cycle_stats.command_validation_failures;
+      cycle_stats_.rate_limit_events = snapshot.cycle_stats.rate_limit_events;
+    }
+
+    maybe_update_diagnostics();
+    return return_type::OK;
+  }
+
   auto start_time = std::chrono::steady_clock::now();
 
   const auto is_fail_fast_transport_error = [](int status) -> bool {
@@ -1408,12 +1541,18 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
         "Fail-fast transport error (%d) during %s; marking all joints unhealthy",
         status, context);
       for (auto & joint : joints_) {
+        joint.read_error = static_cast<double>(status);
         joint.healthy = 0.0;
         joint.telemetry_valid = 0.0;
         hold_joint_state(joint);
       }
+      for (auto & drive : drives_) {
+        drive.can_error_read_error = static_cast<double>(status);
+        drive.can_error = 0U;
+      }
       for (auto & sensor : sensors_) {
         sensor.vbus_voltage = std::numeric_limits<double>::quiet_NaN();
+        sensor.transport_error = static_cast<double>(status);
       }
     };
 
@@ -1691,6 +1830,35 @@ return_type ODriveHardwareInterface::write(
   const rclcpp::Time & time,
   const rclcpp::Duration & period)
 {
+  if (runtime_config_.enable_async_io) {
+    AsyncCommandSnapshot cmd;
+    cmd.dt_s = period.seconds();
+    cmd.command_position.resize(joints_.size());
+    cmd.command_velocity.resize(joints_.size());
+    cmd.command_effort.resize(joints_.size());
+    cmd.control_level.resize(joints_.size());
+
+    {
+      std::shared_lock<std::shared_mutex> lock(state_mutex_);
+      for (std::size_t i = 0; i < joints_.size(); ++i) {
+        cmd.command_position[i] = joints_[i].command_position;
+        cmd.command_velocity[i] = joints_[i].command_velocity;
+        cmd.command_effort[i] = joints_[i].command_effort;
+        cmd.control_level[i] = joints_[i].control_level;
+      }
+    }
+
+    {
+      std::unique_lock<std::mutex> lock(async_io_mutex_);
+      async_latest_command_ = std::move(cmd);
+      async_io_request_pending_ = true;
+    }
+    async_io_cv_.notify_one();
+
+    (void)time;
+    return return_type::OK;
+  }
+
   auto start_time = std::chrono::steady_clock::now();
 
   const auto is_fail_fast_transport_error = [](int status) -> bool {
@@ -1979,5 +2147,598 @@ return_type ODriveHardwareInterface::write(
   }
 
   return return_type::OK;
+}
+
+void ODriveHardwareInterface::async_io_init_buffers()
+{
+  std::unique_lock<std::mutex> lock(async_io_mutex_);
+
+  async_joint_static_.resize(joints_.size());
+  for (std::size_t i = 0; i < joints_.size(); ++i) {
+    async_joint_static_[i].serial_number = joints_[i].serial_number;
+    async_joint_static_[i].axis = joints_[i].axis;
+    async_joint_static_[i].invert_axis = joints_[i].invert_axis;
+    async_joint_static_[i].enable_watchdog = joints_[i].enable_watchdog;
+    async_joint_static_[i].torque_constant = joints_[i].torque_constant;
+    async_joint_static_[i].command_limits = joints_[i].command_limits;
+    async_joint_static_[i].feedback_limits = joints_[i].feedback_limits;
+  }
+
+  async_latest_command_.dt_s = 0.0;
+  async_latest_command_.command_position.assign(joints_.size(), 0.0);
+  async_latest_command_.command_velocity.assign(joints_.size(), 0.0);
+  async_latest_command_.command_effort.assign(joints_.size(), 0.0);
+  async_latest_command_.control_level.assign(joints_.size(), AxisControlLevel::UNDEFINED);
+
+  async_latest_telemetry_.stamp = std::chrono::steady_clock::time_point{};
+  async_latest_telemetry_.transport_ok = static_cast<bool>(transport_);
+  async_latest_telemetry_.transport_error = 0;
+  async_latest_telemetry_.sensor_vbus_voltage.assign(
+    sensors_.size(), std::numeric_limits<double>::quiet_NaN());
+  async_latest_telemetry_.sensor_transport_error.assign(sensors_.size(), 0.0);
+  async_latest_telemetry_.drive_can_error.assign(drives_.size(), 0U);
+  async_latest_telemetry_.drive_can_error_read_error.assign(drives_.size(), 0.0);
+
+  const std::size_t n = joints_.size();
+  async_latest_telemetry_.joint_position.assign(n, 0.0);
+  async_latest_telemetry_.joint_velocity.assign(n, 0.0);
+  async_latest_telemetry_.joint_effort.assign(n, 0.0);
+  async_latest_telemetry_.joint_axis_error.assign(n, std::numeric_limits<double>::quiet_NaN());
+  async_latest_telemetry_.joint_motor_error.assign(n, std::numeric_limits<double>::quiet_NaN());
+  async_latest_telemetry_.joint_encoder_error.assign(n, std::numeric_limits<double>::quiet_NaN());
+  async_latest_telemetry_.joint_controller_error.assign(
+    n,
+    std::numeric_limits<double>::quiet_NaN());
+  async_latest_telemetry_.joint_fet_temperature.assign(n, std::numeric_limits<double>::quiet_NaN());
+  async_latest_telemetry_.joint_motor_temperature.assign(
+    n,
+    std::numeric_limits<double>::quiet_NaN());
+  async_latest_telemetry_.joint_read_error.assign(n, 0.0);
+  async_latest_telemetry_.joint_write_error.assign(n, 0.0);
+  async_latest_telemetry_.joint_telemetry_valid.assign(n, 0.0);
+  async_latest_telemetry_.joint_healthy.assign(n, 0.0);
+  async_latest_telemetry_.joint_position_rate_limited.assign(n, 0.0);
+  async_latest_telemetry_.joint_velocity_rate_limited.assign(n, 0.0);
+  async_latest_telemetry_.joint_effort_rate_limited.assign(n, 0.0);
+
+  async_last_command_position_.assign(n, std::numeric_limits<double>::quiet_NaN());
+  async_last_command_velocity_.assign(n, std::numeric_limits<double>::quiet_NaN());
+  async_last_command_effort_.assign(n, std::numeric_limits<double>::quiet_NaN());
+  async_last_valid_position_.assign(n, 0.0);
+  async_last_valid_velocity_.assign(n, 0.0);
+  async_axis_faulted_.assign(n, false);
+  async_idle_requested_on_fault_.assign(n, false);
+
+  async_cycle_in_flight_ = false;
+  async_io_stop_ = false;
+  async_io_request_pending_ = false;
+}
+
+void ODriveHardwareInterface::async_io_start()
+{
+  if (!runtime_config_.enable_async_io) {
+    return;
+  }
+
+  std::unique_lock<std::mutex> lock(async_io_mutex_);
+  if (async_io_thread_.joinable()) {
+    return;
+  }
+
+  async_io_stop_ = false;
+  async_io_request_pending_ = true;
+  async_cycle_in_flight_ = false;
+  async_cycle_start_ = std::chrono::steady_clock::time_point{};
+
+  async_io_thread_ = std::thread([this]() {async_io_thread_main();});
+}
+
+void ODriveHardwareInterface::async_io_stop_and_join()
+{
+  {
+    std::unique_lock<std::mutex> lock(async_io_mutex_);
+    if (!async_io_thread_.joinable()) {
+      async_io_stop_ = false;
+      async_io_request_pending_ = false;
+      async_cycle_in_flight_ = false;
+      return;
+    }
+    async_io_stop_ = true;
+    async_io_request_pending_ = true;
+  }
+  async_io_cv_.notify_one();
+
+  if (async_io_thread_.joinable()) {
+    async_io_thread_.join();
+  }
+
+  std::unique_lock<std::mutex> lock(async_io_mutex_);
+  async_io_stop_ = false;
+  async_io_request_pending_ = false;
+  async_cycle_in_flight_ = false;
+}
+
+void ODriveHardwareInterface::async_io_publish_snapshot(AsyncTelemetrySnapshot && snapshot)
+{
+  std::unique_lock<std::mutex> lock(async_io_mutex_);
+  async_latest_telemetry_ = std::move(snapshot);
+}
+
+bool ODriveHardwareInterface::async_io_should_report_deadline_miss(
+  const std::chrono::steady_clock::time_point & now)
+{
+  std::unique_lock<std::mutex> lock(async_io_mutex_);
+  if (!async_cycle_in_flight_) {
+    return false;
+  }
+  const double age_s = std::chrono::duration<double>(now - async_cycle_start_).count();
+  return age_s > runtime_config_.async_cycle_deadline_sec;
+}
+
+void ODriveHardwareInterface::async_io_thread_main()
+{
+  const auto is_fail_fast_transport_error = [](int status) -> bool {
+      return status == LIBUSB_ERROR_TIMEOUT || status == LIBUSB_ERROR_NO_DEVICE;
+    };
+
+  while (true) {
+    AsyncCommandSnapshot command;
+    {
+      std::unique_lock<std::mutex> lock(async_io_mutex_);
+      async_io_cv_.wait(lock, [&]() {return async_io_stop_ || async_io_request_pending_;});
+      if (async_io_stop_) {
+        break;
+      }
+
+      command = async_latest_command_;
+      async_io_request_pending_ = false;
+
+      async_cycle_in_flight_ = true;
+      async_cycle_start_ = std::chrono::steady_clock::now();
+    }
+
+    const auto cycle_start = std::chrono::steady_clock::now();
+
+    // Start from a copy of the previous snapshot so sizes are correct and
+    // hold behavior has a sane baseline.
+    AsyncTelemetrySnapshot snapshot;
+    {
+      std::unique_lock<std::mutex> lock(async_io_mutex_);
+      snapshot = async_latest_telemetry_;
+      snapshot.cycle_stats = async_latest_telemetry_.cycle_stats;
+    }
+    snapshot.stamp = cycle_start;
+    snapshot.transport_ok = static_cast<bool>(transport_);
+    snapshot.transport_error = 0;
+
+    // Default: clear rate limiter flags each cycle (they are write-path derived).
+    for (auto & v : snapshot.joint_position_rate_limited) {
+      v = 0.0;
+    }
+    for (auto & v : snapshot.joint_velocity_rate_limited) {
+      v = 0.0;
+    }
+    for (auto & v : snapshot.joint_effort_rate_limited) {
+      v = 0.0;
+    }
+
+    auto mark_all_unhealthy_and_hold = [&](int status, const char * context) {
+        snapshot.transport_ok = false;
+        snapshot.transport_error = status;
+        RCUTILS_LOG_ERROR_THROTTLE_NAMED(
+          RCUTILS_STEADY_TIME, runtime_config_.log_throttle_ms, kLoggerName,
+          "Async I/O fail-fast transport error (%d) during %s; marking all joints unhealthy",
+          status, context);
+
+        for (std::size_t i = 0; i < snapshot.joint_healthy.size(); ++i) {
+          snapshot.joint_healthy[i] = 0.0;
+          snapshot.joint_telemetry_valid[i] = 0.0;
+          snapshot.joint_read_error[i] = static_cast<double>(status);
+          snapshot.joint_write_error[i] = static_cast<double>(status);
+
+          snapshot.joint_position[i] =
+            (i < async_last_valid_position_.size() &&
+            std::isfinite(async_last_valid_position_[i])) ?
+            async_last_valid_position_[i] : 0.0;
+          snapshot.joint_velocity[i] = 0.0;
+          snapshot.joint_effort[i] = 0.0;
+        }
+
+        for (auto & v : snapshot.sensor_vbus_voltage) {
+          v = std::numeric_limits<double>::quiet_NaN();
+        }
+      };
+
+    // --- READ PHASE ---
+    if (!transport_) {
+      for (std::size_t i = 0; i < snapshot.joint_healthy.size(); ++i) {
+        snapshot.joint_healthy[i] = 0.0;
+        snapshot.joint_telemetry_valid[i] = 0.0;
+        snapshot.joint_position[i] =
+          (i < async_last_valid_position_.size() &&
+          std::isfinite(async_last_valid_position_[i])) ?
+          async_last_valid_position_[i] : 0.0;
+        snapshot.joint_velocity[i] = 0.0;
+        snapshot.joint_effort[i] = 0.0;
+      }
+      for (auto & v : snapshot.sensor_vbus_voltage) {
+        v = std::numeric_limits<double>::quiet_NaN();
+      }
+    } else {
+      // Sensors
+      for (std::size_t i = 0; i < snapshot.sensor_vbus_voltage.size(); ++i) {
+        float vbus_voltage = 0.0F;
+        const int status = transport_->read(
+          sensors_[i].serial_number, odrive::VBUS_VOLTAGE,
+          vbus_voltage);
+        if (status != 0) {
+          snapshot.sensor_transport_error[i] = static_cast<double>(status);
+          snapshot.sensor_vbus_voltage[i] = std::numeric_limits<double>::quiet_NaN();
+
+          if (is_fail_fast_transport_error(status)) {
+            mark_all_unhealthy_and_hold(status, "reading vbus voltage");
+            transport_.reset();
+            goto publish_cycle;
+          }
+          continue;
+        }
+        snapshot.sensor_vbus_voltage[i] = static_cast<double>(vbus_voltage);
+        snapshot.sensor_transport_error[i] = 0.0;
+      }
+
+      // Drives (CAN error)
+      for (std::size_t i = 0; i < drives_.size() && i < snapshot.drive_can_error.size(); ++i) {
+        std::uint32_t can_error = 0;
+        const int status =
+          transport_->read(drives_[i].serial_number, odrive::CAN__ERROR, can_error);
+        if (status != 0) {
+          snapshot.drive_can_error_read_error[i] = static_cast<double>(status);
+          snapshot.drive_can_error[i] = 0;
+
+          if (is_fail_fast_transport_error(status)) {
+            mark_all_unhealthy_and_hold(status, "reading CAN error");
+            transport_.reset();
+            goto publish_cycle;
+          }
+          continue;
+        }
+        snapshot.drive_can_error_read_error[i] = 0.0;
+        snapshot.drive_can_error[i] = can_error;
+      }
+
+      // Joints (axis telemetry)
+      for (std::size_t i = 0; i < async_joint_static_.size(); ++i) {
+        AxisTelemetrySample sample;
+        std::string failing_stage;
+        const int status = read_axis_telemetry(
+          *transport_,
+          async_joint_static_[i].serial_number,
+          async_joint_static_[i].axis,
+          async_joint_static_[i].torque_constant,
+          sample,
+          failing_stage);
+
+        if (status != 0) {
+          snapshot.joint_read_error[i] = static_cast<double>(status);
+          snapshot.joint_telemetry_valid[i] = 0.0;
+          snapshot.joint_healthy[i] = 0.0;
+          snapshot.joint_position[i] =
+            (i < async_last_valid_position_.size() &&
+            std::isfinite(async_last_valid_position_[i])) ?
+            async_last_valid_position_[i] : 0.0;
+          snapshot.joint_velocity[i] = 0.0;
+          snapshot.joint_effort[i] = 0.0;
+
+          if (is_fail_fast_transport_error(status)) {
+            mark_all_unhealthy_and_hold(status, "reading axis telemetry");
+            transport_.reset();
+            goto publish_cycle;
+          }
+          continue;
+        }
+
+        // Feedback validation
+        bool feedback_valid = true;
+
+        if (!std::isfinite(sample.position) || !std::isfinite(sample.velocity) ||
+          !std::isfinite(sample.effort))
+        {
+          feedback_valid = false;
+        }
+
+        if (feedback_valid && async_joint_static_[i].feedback_limits.max_believable_velocity &&
+          std::abs(sample.velocity) >
+          *async_joint_static_[i].feedback_limits.max_believable_velocity)
+        {
+          feedback_valid = false;
+        }
+
+        if (feedback_valid && async_joint_static_[i].feedback_limits.max_believable_effort &&
+          std::abs(sample.effort) > *async_joint_static_[i].feedback_limits.max_believable_effort)
+        {
+          feedback_valid = false;
+        }
+
+        if (feedback_valid && std::isfinite(async_last_valid_position_[i]) &&
+          async_joint_static_[i].feedback_limits.max_position_discontinuity)
+        {
+          const double jump = std::abs(sample.position - async_last_valid_position_[i]);
+          if (jump > *async_joint_static_[i].feedback_limits.max_position_discontinuity) {
+            feedback_valid = false;
+          }
+        }
+
+        if (!feedback_valid) {
+          snapshot.joint_read_error[i] = -1.0;
+          snapshot.joint_telemetry_valid[i] = 0.0;
+          snapshot.joint_healthy[i] = 0.0;
+          snapshot.joint_position[i] = std::isfinite(async_last_valid_position_[i]) ?
+            async_last_valid_position_[i] : 0.0;
+          snapshot.joint_velocity[i] = 0.0;
+          snapshot.joint_effort[i] = 0.0;
+          continue;
+        }
+
+        const bool errors_clear =
+          std::isfinite(sample.axis_error) && sample.axis_error == 0.0 &&
+          std::isfinite(sample.motor_error) && sample.motor_error == 0.0 &&
+          std::isfinite(sample.encoder_error) && sample.encoder_error == 0.0 &&
+          std::isfinite(sample.controller_error) && sample.controller_error == 0.0;
+        snapshot.joint_healthy[i] = errors_clear ? 1.0 : 0.0;
+
+        const double sign = async_joint_static_[i].invert_axis ? -1.0 : 1.0;
+        if (errors_clear) {
+          snapshot.joint_effort[i] = sample.effort * sign;
+          snapshot.joint_velocity[i] = sample.velocity * sign;
+          snapshot.joint_position[i] = sample.position * sign;
+          async_last_valid_position_[i] = snapshot.joint_position[i];
+          async_last_valid_velocity_[i] = snapshot.joint_velocity[i];
+        } else {
+          snapshot.joint_position[i] = std::isfinite(async_last_valid_position_[i]) ?
+            async_last_valid_position_[i] : 0.0;
+          snapshot.joint_velocity[i] = 0.0;
+          snapshot.joint_effort[i] = 0.0;
+        }
+
+        snapshot.joint_axis_error[i] = sample.axis_error;
+        snapshot.joint_motor_error[i] = sample.motor_error;
+        snapshot.joint_encoder_error[i] = sample.encoder_error;
+        snapshot.joint_controller_error[i] = sample.controller_error;
+        snapshot.joint_fet_temperature[i] = sample.fet_temperature;
+        snapshot.joint_motor_temperature[i] = sample.motor_temperature;
+        snapshot.joint_read_error[i] = 0.0;
+        snapshot.joint_telemetry_valid[i] = 1.0;
+      }
+    }
+
+    // Read stats
+    ++snapshot.cycle_stats.read_cycles;
+    {
+      const auto read_duration = std::chrono::steady_clock::now() - cycle_start;
+      const double duration_sec = std::chrono::duration<double>(read_duration).count();
+      if (duration_sec > snapshot.cycle_stats.max_read_cycle_time_sec) {
+        snapshot.cycle_stats.max_read_cycle_time_sec = duration_sec;
+      }
+      if (runtime_config_.enable_deadline_warnings &&
+        duration_sec > runtime_config_.max_read_cycle_time_sec)
+      {
+        ++snapshot.cycle_stats.read_deadline_misses;
+      }
+    }
+
+    // --- WRITE PHASE ---
+    if (transport_) {
+      // Calculate time delta for rate limiting
+      double dt = command.dt_s;
+      if (dt <= 0.0 || !std::isfinite(dt)) {
+        dt = 0.001;
+      }
+
+      const bool lifecycle_ok = !safety_config_.gate_outputs_with_lifecycle ||
+        outputs_enabled_.load(std::memory_order_acquire);
+      if (lifecycle_ok) {
+        for (std::size_t i = 0; i < async_joint_static_.size(); ++i) {
+          const auto axis_error_value = extract_error_value(snapshot.joint_axis_error[i]);
+          const auto motor_error_value = extract_error_value(snapshot.joint_motor_error[i]);
+          const auto encoder_error_value = extract_error_value(snapshot.joint_encoder_error[i]);
+          const auto controller_error_value =
+            extract_error_value(snapshot.joint_controller_error[i]);
+
+          const bool has_fault = safety_config_.mask_faulted_axes &&
+            (axis_error_value.has_value() || motor_error_value.has_value() ||
+            encoder_error_value.has_value() || controller_error_value.has_value());
+
+          const AxisControlLevel level =
+            (i <
+            command.control_level.size()) ? command.control_level[i] : AxisControlLevel::UNDEFINED;
+
+          double cmd_pos =
+            (i < command.command_position.size()) ? command.command_position[i] : 0.0;
+          double cmd_vel =
+            (i < command.command_velocity.size()) ? command.command_velocity[i] : 0.0;
+          double cmd_eff = (i < command.command_effort.size()) ? command.command_effort[i] : 0.0;
+
+          AxisCommandState command_state{
+            cmd_pos,
+            cmd_vel,
+            cmd_eff,
+            snapshot.joint_position[i],
+            snapshot.joint_velocity[i],
+            snapshot.joint_effort[i]};
+
+          std::ostringstream rate_limit_msg;
+          bool was_rate_limited = false;
+
+          if (level == AxisControlLevel::POSITION) {
+            if (!apply_rate_limiting(
+                "Position",
+                command_state.command_position,
+                async_last_command_position_[i],
+                async_joint_static_[i].command_limits.max_position_rate,
+                dt,
+                rate_limit_msg))
+            {
+              was_rate_limited = true;
+              snapshot.joint_position_rate_limited[i] = 1.0;
+              ++snapshot.cycle_stats.rate_limit_events;
+            }
+          }
+
+          if (level == AxisControlLevel::POSITION || level == AxisControlLevel::VELOCITY) {
+            if (!apply_rate_limiting(
+                "Velocity",
+                command_state.command_velocity,
+                async_last_command_velocity_[i],
+                async_joint_static_[i].command_limits.max_velocity_rate,
+                dt,
+                rate_limit_msg))
+            {
+              was_rate_limited = true;
+              snapshot.joint_velocity_rate_limited[i] = 1.0;
+              ++snapshot.cycle_stats.rate_limit_events;
+            }
+          }
+
+          if (!apply_rate_limiting(
+              "Effort",
+              command_state.command_effort,
+              async_last_command_effort_[i],
+              async_joint_static_[i].command_limits.max_effort_rate,
+              dt,
+              rate_limit_msg))
+          {
+            was_rate_limited = true;
+            snapshot.joint_effort_rate_limited[i] = 1.0;
+            ++snapshot.cycle_stats.rate_limit_events;
+          }
+
+          if (was_rate_limited) {
+            RCUTILS_LOG_WARN_THROTTLE_NAMED(
+              RCUTILS_STEADY_TIME, runtime_config_.log_throttle_ms, kLoggerName,
+              "Rate limited joint '%s': %s",
+              info_.joints[i].name.c_str(),
+              rate_limit_msg.str().c_str());
+          }
+
+          std::string validation_error;
+          const bool command_valid = validate_joint_command(
+            async_joint_static_[i].command_limits, level, command_state, validation_error);
+
+          if (!command_valid && level != AxisControlLevel::UNDEFINED) {
+            ++snapshot.cycle_stats.command_validation_failures;
+            RCUTILS_LOG_ERROR_NAMED(
+              kLoggerName,
+              "Rejected command for joint '%s': %s (falling back to zero torque)",
+              info_.joints[i].name.c_str(),
+              validation_error.c_str());
+            command_state.command_position =
+              std::isfinite(command_state.state_position) ? command_state.state_position : 0.0;
+            command_state.command_velocity =
+              std::isfinite(command_state.state_velocity) ? command_state.state_velocity : 0.0;
+            command_state.command_effort = 0.0;
+          }
+
+          if (has_fault) {
+            const bool first_fault =
+              (i < async_axis_faulted_.size()) ? !async_axis_faulted_[i] : false;
+            if (i < async_axis_faulted_.size()) {
+              async_axis_faulted_[i] = true;
+            }
+
+            if (first_fault) {
+              RCUTILS_LOG_WARN_NAMED(
+                kLoggerName,
+                "Masking commands for joint '%s' due to fault(s)",
+                info_.joints[i].name.c_str());
+            }
+
+            if (safety_config_.request_idle_on_axis_fault &&
+              i < async_idle_requested_on_fault_.size() && !async_idle_requested_on_fault_[i])
+            {
+              constexpr std::int32_t requested_state = kAxisStateIdle;
+              const int status = transport_->write(
+                async_joint_static_[i].serial_number,
+                axis_endpoint(odrive::AXIS__REQUESTED_STATE, async_joint_static_[i].axis),
+                requested_state);
+              if (status != 0) {
+                snapshot.joint_write_error[i] = static_cast<double>(status);
+                if (is_fail_fast_transport_error(status)) {
+                  mark_all_unhealthy_and_hold(status, "requesting axis idle state");
+                  transport_.reset();
+                  goto publish_cycle;
+                }
+              } else {
+                async_idle_requested_on_fault_[i] = true;
+              }
+            }
+
+            continue;
+          }
+
+          if (i < async_axis_faulted_.size() && async_axis_faulted_[i]) {
+            async_axis_faulted_[i] = false;
+          }
+          if (i < async_idle_requested_on_fault_.size() && async_idle_requested_on_fault_[i]) {
+            async_idle_requested_on_fault_[i] = false;
+          }
+
+          // Apply axis inversion before sending.
+          if (async_joint_static_[i].invert_axis) {
+            command_state.command_position *= -1.0;
+            command_state.command_velocity *= -1.0;
+            command_state.command_effort *= -1.0;
+          }
+
+          std::string failing_stage;
+          const int status = write_axis_command(
+            *transport_,
+            async_joint_static_[i].serial_number,
+            async_joint_static_[i].axis,
+            level,
+            command_state,
+            async_joint_static_[i].enable_watchdog,
+            failing_stage);
+          if (status != 0) {
+            snapshot.joint_write_error[i] = static_cast<double>(status);
+            if (is_fail_fast_transport_error(status)) {
+              mark_all_unhealthy_and_hold(status, "writing axis command");
+              transport_.reset();
+              goto publish_cycle;
+            }
+            continue;
+          }
+
+          snapshot.joint_write_error[i] = 0.0;
+          async_last_command_position_[i] = command_state.command_position;
+          async_last_command_velocity_[i] = command_state.command_velocity;
+          async_last_command_effort_[i] = command_state.command_effort;
+        }
+      }
+    }
+
+    ++snapshot.cycle_stats.write_cycles;
+    {
+      const auto duration = std::chrono::steady_clock::now() - cycle_start;
+      const double duration_sec = std::chrono::duration<double>(duration).count();
+      if (duration_sec > snapshot.cycle_stats.max_write_cycle_time_sec) {
+        snapshot.cycle_stats.max_write_cycle_time_sec = duration_sec;
+      }
+      if (runtime_config_.enable_deadline_warnings &&
+        duration_sec > runtime_config_.max_write_cycle_time_sec)
+      {
+        ++snapshot.cycle_stats.write_deadline_misses;
+      }
+    }
+
+publish_cycle:
+    {
+      std::unique_lock<std::mutex> lock(async_io_mutex_);
+      async_cycle_in_flight_ = false;
+      async_latest_telemetry_ = snapshot;
+    }
+  }
+
+  std::unique_lock<std::mutex> lock(async_io_mutex_);
+  async_cycle_in_flight_ = false;
 }
 }    // namespace odrive_hardware_interface

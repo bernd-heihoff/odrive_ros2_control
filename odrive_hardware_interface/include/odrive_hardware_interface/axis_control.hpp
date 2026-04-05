@@ -91,7 +91,7 @@ int perform_axis_mode_switch(
 /// - POSITION: writes position, velocity (limit), and torque (limit)
 /// - VELOCITY: writes velocity and torque (feed-forward)
 /// - EFFORT: writes torque only
-/// - UNDEFINED: no-op (optionally feeds watchdog if enabled)
+/// - UNDEFINED: no-op (does not write setpoints and does not feed the watchdog)
 ///
 /// WATCHDOG SAFETY DESIGN:
 /// Watchdog feeds occur ONLY during successful command writes. This couples
@@ -107,7 +107,7 @@ int perform_axis_mode_switch(
 /// @param axis Axis index (0 or 1)
 /// @param level Active control level (determines which commands are sent)
 /// @param command_state Command values to transmit
-/// @param enable_watchdog If true, feeds watchdog after successful write
+/// @param enable_watchdog If true, feeds watchdog after successful write (ignored for UNDEFINED)
 /// @param[out] failing_stage Description of which step failed (empty on success)
 /// @return 0 on success, transport error code on failure
 int write_axis_command(
