@@ -145,6 +145,10 @@ private:
     unsigned int usb_timeout_ms{100};
     // Throttle interval for repeated log messages in milliseconds
     unsigned int log_throttle_ms{2000};
+
+    // Interval for low-rate transport offline summary logs in seconds.
+    // Transition logs (offline/recovered) are emitted once per state change.
+    double transport_summary_period_sec{30.0};
     // Retry logic for transient USB errors (fixed retry count for deterministic timing)
     unsigned int usb_read_retries{3};
     unsigned int usb_write_retries{3};
@@ -162,6 +166,8 @@ private:
     // read() will report joints unhealthy even if the last snapshot is old.
     double async_cycle_deadline_sec{0.015};
   };
+
+  void update_transport_health(bool ok, int error_code, const char * context);
 
   struct AsyncJointStatic
   {
@@ -249,6 +255,21 @@ private:
   void maybe_update_diagnostics();
   static std::string serial_to_hex(std::int64_t serial_number);
   static std::string join_messages(const std::vector<std::string> & parts);
+
+  struct TransportLogState
+  {
+    bool known{false};
+    bool ok{true};
+    int last_error_code{0};
+    std::string last_context;
+
+    std::chrono::steady_clock::time_point offline_since{};
+    std::chrono::steady_clock::time_point last_transition{};
+    std::chrono::steady_clock::time_point last_summary{};
+  };
+
+  std::mutex transport_log_mutex_;
+  TransportLogState transport_log_state_;
 
   struct SensorContext
   {

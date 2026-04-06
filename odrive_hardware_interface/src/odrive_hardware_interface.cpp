@@ -353,8 +353,12 @@ CallbackReturn ODriveHardwareInterface::initialize_transport()
 
   const auto init_status = transport_->initialize(serial_numbers);
   if (init_status != 0) {
-    return to_callback_return(init_status, "initialising ODrive transport");
+    update_transport_health(false, init_status, "initialising ODrive transport");
+    transport_.reset();
+    return CallbackReturn::ERROR;
   }
+
+  update_transport_health(true, 0, "initialising ODrive transport");
 
   for (std::size_t i = 0; i < joints_.size(); i++) {
     auto & joint_context = joints_[i];
@@ -370,7 +374,9 @@ CallbackReturn ODriveHardwareInterface::initialize_transport()
       std::chrono::milliseconds(runtime_config_.usb_retry_delay_ms),
       cycle_stats_.usb_read_retries_total);
     if (read_status != 0) {
-      return to_callback_return(read_status, "reading motor torque constant");
+      update_transport_health(false, read_status, "reading motor torque constant");
+      transport_.reset();
+      return CallbackReturn::ERROR;
     }
     joint_context.torque_constant = torque_constant;
 
@@ -384,7 +390,9 @@ CallbackReturn ODriveHardwareInterface::initialize_transport()
         std::chrono::milliseconds(runtime_config_.usb_retry_delay_ms),
         cycle_stats_.usb_write_retries_total);
       if (write_timeout_status != 0) {
-        return to_callback_return(write_timeout_status, "configuring watchdog timeout");
+        update_transport_health(false, write_timeout_status, "configuring watchdog timeout");
+        transport_.reset();
+        return CallbackReturn::ERROR;
       }
     }
 
@@ -399,7 +407,9 @@ CallbackReturn ODriveHardwareInterface::initialize_transport()
       std::chrono::milliseconds(runtime_config_.usb_retry_delay_ms),
       cycle_stats_.usb_write_retries_total);
     if (write_enable_status != 0) {
-      return to_callback_return(write_enable_status, "disabling watchdog during initialization");
+      update_transport_health(false, write_enable_status, "disabling watchdog during initialization");
+      transport_.reset();
+      return CallbackReturn::ERROR;
     }
   }
 
@@ -507,6 +517,19 @@ CallbackReturn ODriveHardwareInterface::configure_from_info(
         config_limits::MAX_LOG_THROTTLE_MS,
         config_limits::DEFAULT_LOG_THROTTLE_MS,
         runtime_config_.log_throttle_ms);
+    }
+
+    auto transport_summary_it = params.find("transport_summary_period_sec");
+    if (transport_summary_it != params.end()) {
+      double parsed = runtime_config_.transport_summary_period_sec;
+      if (try_parse_double(transport_summary_it->second, parsed) && parsed >= 0.0) {
+        runtime_config_.transport_summary_period_sec = parsed;
+      } else {
+        RCUTILS_LOG_WARN_NAMED(
+          kLoggerName,
+          "Invalid transport_summary_period_sec '%s'; keeping default",
+          transport_summary_it->second.c_str());
+      }
     }
 
     auto max_read_it = params.find("max_read_cycle_time_sec");
@@ -716,6 +739,84 @@ CallbackReturn ODriveHardwareInterface::configure_from_info(
   return CallbackReturn::SUCCESS;
 }
 
+void ODriveHardwareInterface::update_transport_health(bool ok, int error_code, const char * context)
+{
+  const auto now = std::chrono::steady_clock::now();
+
+  std::lock_guard<std::mutex> guard(transport_log_mutex_);
+
+  if (!transport_log_state_.known) {
+    transport_log_state_.known = true;
+    transport_log_state_.ok = ok;
+    transport_log_state_.last_error_code = ok ? 0 : error_code;
+    transport_log_state_.last_context = context ? std::string(context) : std::string();
+    transport_log_state_.last_transition = now;
+    transport_log_state_.last_summary = now;
+    if (!ok) {
+      transport_log_state_.offline_since = now;
+      RCUTILS_LOG_WARN_NAMED(
+        kLoggerName,
+        "ODrive transport offline (err=%d) during %s. Outputs disabled; deactivate+activate to reconnect. "
+        "If e-stop is pressed, this may be expected.",
+        transport_log_state_.last_error_code,
+        transport_log_state_.last_context.empty() ? "unknown" : transport_log_state_.last_context.c_str());
+    }
+    return;
+  }
+
+  if (context) {
+    transport_log_state_.last_context = context;
+  }
+
+  if (ok) {
+    error_code = 0;
+  }
+
+  // Preserve the last non-zero error code to keep summaries meaningful.
+  if (!ok && error_code != 0) {
+    transport_log_state_.last_error_code = error_code;
+  }
+
+  if (ok != transport_log_state_.ok) {
+    const bool was_ok = transport_log_state_.ok;
+    transport_log_state_.ok = ok;
+    transport_log_state_.last_transition = now;
+    transport_log_state_.last_summary = now;
+
+    if (!ok && was_ok) {
+      transport_log_state_.offline_since = now;
+      RCUTILS_LOG_WARN_NAMED(
+        kLoggerName,
+        "ODrive transport offline (err=%d) during %s. Outputs disabled; deactivate+activate to reconnect. "
+        "If e-stop is pressed, this may be expected.",
+        transport_log_state_.last_error_code,
+        transport_log_state_.last_context.empty() ? "unknown" : transport_log_state_.last_context.c_str());
+      return;
+    }
+
+    if (ok && !was_ok) {
+      const double offline_s = std::chrono::duration<double>(now - transport_log_state_.offline_since).count();
+      RCUTILS_LOG_INFO_NAMED(kLoggerName, "ODrive transport recovered after %.1fs.", offline_s);
+      return;
+    }
+  }
+
+  if (!ok && runtime_config_.transport_summary_period_sec > 0.0) {
+    const double since_summary_s =
+      std::chrono::duration<double>(now - transport_log_state_.last_summary).count();
+    if (since_summary_s >= runtime_config_.transport_summary_period_sec) {
+      const double offline_s = std::chrono::duration<double>(now - transport_log_state_.offline_since).count();
+      RCUTILS_LOG_WARN_NAMED(
+        kLoggerName,
+        "ODrive transport still offline (err=%d) for %.1fs (last: %s).",
+        transport_log_state_.last_error_code,
+        offline_s,
+        transport_log_state_.last_context.empty() ? "unknown" : transport_log_state_.last_context.c_str());
+      transport_log_state_.last_summary = now;
+    }
+  }
+}
+
 CallbackReturn ODriveHardwareInterface::on_activate(const rclcpp_lifecycle::State &)
 {
   RCUTILS_LOG_INFO_NAMED(
@@ -742,11 +843,6 @@ CallbackReturn ODriveHardwareInterface::on_activate(const rclcpp_lifecycle::Stat
     if (safety_config_.gate_outputs_with_lifecycle) {
       outputs_enabled_.store(false, std::memory_order_release);
     }
-    RCUTILS_LOG_ERROR_NAMED(
-      kLoggerName,
-      "Failed to initialize ODrive transport during activation. "
-      "Continuing without hardware (outputs disabled). "
-      "Check USB connections and reactivate to retry.");
     return CallbackReturn::SUCCESS;
   }
 
@@ -1546,6 +1642,7 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
       cycle_stats_.rate_limit_events = snapshot.cycle_stats.rate_limit_events;
     }
 
+    update_transport_health(snapshot.transport_ok, snapshot.transport_error, "async I/O read");
     maybe_update_diagnostics();
     return return_type::OK;
   }
@@ -1557,10 +1654,7 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
     };
 
   const auto mark_all_unhealthy_and_hold = [this](int status, const char * context) {
-      RCUTILS_LOG_ERROR_THROTTLE_NAMED(
-        RCUTILS_STEADY_TIME, runtime_config_.log_throttle_ms, kLoggerName,
-        "Fail-fast transport error (%d) during %s; marking all joints unhealthy",
-        status, context);
+      update_transport_health(false, status, context);
       for (auto & joint : joints_) {
         joint.read_error = static_cast<double>(status);
         joint.healthy = 0.0;
@@ -1584,6 +1678,7 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
   // If transport lost (disconnected during operation), set all joints unhealthy and return.
   // Recovery requires deactivate+activate cycle.
   if (!transport_) {
+    update_transport_health(false, 0, "read() with no transport");
     for (auto & joint : joints_) {
       joint.healthy = 0.0;
       joint.telemetry_valid = 0.0;
@@ -1592,10 +1687,6 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
     for (auto & sensor : sensors_) {
       sensor.vbus_voltage = std::numeric_limits<double>::quiet_NaN();
     }
-    RCUTILS_LOG_WARN_THROTTLE_NAMED(
-      RCUTILS_STEADY_TIME, runtime_config_.log_throttle_ms, kLoggerName,
-      "Transport unavailable during read(). All joints marked unhealthy. "
-      "Deactivate and reactivate hardware to reconnect.");
     return return_type::OK;
   }
 
@@ -1688,7 +1779,7 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
       std::string action = failing_stage.empty() ? "reading axis telemetry" :
         "reading axis telemetry (" + failing_stage + ")";
       RCUTILS_LOG_WARN_THROTTLE_NAMED(
-        RCUTILS_STEADY_TIME, config_limits::DEFAULT_LOG_THROTTLE_MS, kLoggerName,
+        RCUTILS_STEADY_TIME, runtime_config_.log_throttle_ms, kLoggerName,
         "Transport error (%d) %s for joint[%zu]='%s' (serial 0x%016" PRIx64 " axis %d); "
         "continuing. Last known: pos=%.3f vel=%.3f eff=%.3f",
         status,
@@ -1901,10 +1992,7 @@ return_type ODriveHardwareInterface::write(
 
   // If transport lost, skip all writes. Joints are already marked unhealthy in read().
   if (!transport_) {
-    RCUTILS_LOG_WARN_THROTTLE_NAMED(
-      RCUTILS_STEADY_TIME, runtime_config_.log_throttle_ms, kLoggerName,
-      "Transport unavailable during write(). Skipping all command writes. "
-      "Deactivate and reactivate hardware to reconnect.");
+    update_transport_health(false, 0, "write() with no transport");
     return return_type::OK;
   }
 
@@ -2064,11 +2152,8 @@ return_type ODriveHardwareInterface::write(
           joints_[i].write_error = static_cast<double>(status);
 
           if (is_fail_fast_transport_error(status)) {
+            update_transport_health(false, status, "requesting axis idle state");
             transport_.reset();
-            RCUTILS_LOG_ERROR_THROTTLE_NAMED(
-              RCUTILS_STEADY_TIME, runtime_config_.log_throttle_ms, kLoggerName,
-              "Fail-fast transport error (%d) requesting axis idle state; transport dropped",
-              status);
             return return_type::OK;
           }
 
@@ -2128,16 +2213,13 @@ return_type ODriveHardwareInterface::write(
       joints_[i].write_error = static_cast<double>(status);
 
       if (is_fail_fast_transport_error(status)) {
+        update_transport_health(false, status, action.c_str());
         transport_.reset();
-        RCUTILS_LOG_ERROR_THROTTLE_NAMED(
-          RCUTILS_STEADY_TIME, runtime_config_.log_throttle_ms, kLoggerName,
-          "Fail-fast transport error (%d) %s; transport dropped",
-          status, action.c_str());
         return return_type::OK;
       }
 
       RCUTILS_LOG_WARN_THROTTLE_NAMED(
-        RCUTILS_STEADY_TIME, config_limits::DEFAULT_LOG_THROTTLE_MS, kLoggerName,
+        RCUTILS_STEADY_TIME, runtime_config_.log_throttle_ms, kLoggerName,
         "Transport error (%d) %s for joint[%zu]='%s' (serial 0x%016" PRIx64 " axis %d); "
         "continuing. Command: pos=%.3f vel=%.3f eff=%.3f level=%d",
         status,
@@ -2363,10 +2445,7 @@ void ODriveHardwareInterface::async_io_thread_main()
     auto mark_all_unhealthy_and_hold = [&](int status, const char * context) {
         snapshot.transport_ok = false;
         snapshot.transport_error = status;
-        RCUTILS_LOG_ERROR_THROTTLE_NAMED(
-          RCUTILS_STEADY_TIME, runtime_config_.log_throttle_ms, kLoggerName,
-          "Async I/O fail-fast transport error (%d) during %s; marking all joints unhealthy",
-          status, context);
+        update_transport_health(false, status, context);
 
         for (std::size_t i = 0; i < snapshot.joint_healthy.size(); ++i) {
           snapshot.joint_healthy[i] = 0.0;
