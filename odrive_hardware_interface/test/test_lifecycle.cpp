@@ -17,6 +17,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -445,11 +446,15 @@ TEST_F(LifecycleTest, ActivateFailsWhenTransportCannotMatchSerials)
   const std::int64_t serial0 = 0x0000000000000201LL;
   const std::int64_t serial1 = 0x0000000000000202LL;
 
-  MockTransport * transport = nullptr;
+  bool factory_called = false;
+  auto initialize_calls = std::make_shared<std::size_t>(0);
+  auto initialize_serials = std::make_shared<std::optional<MockTransport::SerialMatrix>>();
   interface.set_transport_factory(
     [&]() {
       auto instance = std::make_unique<MockTransport>();
-      transport = instance.get();
+      factory_called = true;
+      instance->set_initialize_call_count_sink(initialize_calls);
+      instance->set_initialize_serials_sink(initialize_serials);
       instance->expect_initialize(-1);
       return instance;
     });
@@ -527,10 +532,10 @@ TEST_F(LifecycleTest, ActivateFailsWhenTransportCannotMatchSerials)
     EXPECT_DOUBLE_EQ(0.0, eff1);
   }
 
-  ASSERT_NE(nullptr, transport);
-  EXPECT_EQ(1u, transport->initialize_call_count());
-  ASSERT_TRUE(transport->last_initialize_serials().has_value());
-  const auto & matrix = transport->last_initialize_serials().value();
+  EXPECT_TRUE(factory_called);
+  EXPECT_EQ(1u, *initialize_calls);
+  ASSERT_TRUE(initialize_serials->has_value());
+  const auto & matrix = initialize_serials->value();
   ASSERT_EQ(2u, matrix.size());
   EXPECT_EQ(matrix[0], (std::vector<std::int64_t>{serial0, serial1}));
   EXPECT_EQ(matrix[1], (std::vector<std::int64_t>{serial0, serial1}));

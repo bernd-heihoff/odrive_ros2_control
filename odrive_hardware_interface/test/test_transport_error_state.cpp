@@ -14,6 +14,7 @@
 
 #include <gtest/gtest.h>
 
+#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <string>
@@ -125,7 +126,7 @@ TEST(TransportErrorStateTest, ExportsTransportErrorStateInterface)
   auto state_interfaces = interface.export_state_interfaces();
   auto * transport_error = find_state_interface(state_interfaces, "bus", "transport_error");
   ASSERT_NE(nullptr, transport_error);
-  EXPECT_EQ(0.0, transport_error->get_value());
+  EXPECT_TRUE(std::isnan(transport_error->get_value()));
 }
 
 TEST(TransportErrorStateTest, ExportsJointIoStateInterfaces)

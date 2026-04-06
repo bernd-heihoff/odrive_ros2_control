@@ -20,6 +20,7 @@
 #include <cstddef>
 #include <cstring>
 #include <deque>
+#include <memory>
 #include <optional>
 #include <vector>
 
@@ -31,6 +32,16 @@ namespace odrive_hardware_interface
 class MockTransport : public ODriveTransport
 {
 public:
+  void set_initialize_call_count_sink(const std::shared_ptr<std::size_t> & sink)
+  {
+    initialize_call_count_sink_ = sink;
+  }
+
+  void set_initialize_serials_sink(const std::shared_ptr<std::optional<SerialMatrix>> & sink)
+  {
+    initialize_serials_sink_ = sink;
+  }
+
   void expect_initialize(int result = 0)
   {
     initialize_expectations_.push_back(result);
@@ -73,6 +84,12 @@ public:
   {
     ++initialize_call_count_;
     last_initialize_serials_ = serial_numbers;
+    if (initialize_call_count_sink_) {
+      *initialize_call_count_sink_ = initialize_call_count_;
+    }
+    if (initialize_serials_sink_) {
+      *initialize_serials_sink_ = serial_numbers;
+    }
     if (!initialize_expectations_.empty()) {
       const int result = initialize_expectations_.front();
       initialize_expectations_.pop_front();
@@ -193,6 +210,8 @@ private:
   std::deque<int> initialize_expectations_;
   std::size_t initialize_call_count_{0};
   std::optional<SerialMatrix> last_initialize_serials_;
+  std::shared_ptr<std::size_t> initialize_call_count_sink_;
+  std::shared_ptr<std::optional<SerialMatrix>> initialize_serials_sink_;
   std::deque<ReadExpectation> read_expectations_;
   std::deque<WriteExpectation> write_expectations_;
   std::deque<CallExpectation> call_expectations_;

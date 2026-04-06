@@ -275,8 +275,11 @@ private:
   {
     std::int64_t serial_number{0};
     double vbus_voltage{std::numeric_limits<double>::quiet_NaN()};
-    // 0.0 means OK; non-zero holds the last transport error code.
-    double transport_error{0.0};
+    // Transport error semantics:
+    // - NaN: no valid sample yet / transport unavailable
+    // - 0.0: last read OK
+    // - non-zero: last transport error code
+    double transport_error{std::numeric_limits<double>::quiet_NaN()};
   };
 
   struct DriveContext

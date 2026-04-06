@@ -264,7 +264,7 @@ void ODriveHardwareInterface::reset_runtime_state()
 
   for (auto & sensor : sensors_) {
     sensor.vbus_voltage = std::numeric_limits<double>::quiet_NaN();
-    sensor.transport_error = 0.0;
+    sensor.transport_error = std::numeric_limits<double>::quiet_NaN();
   }
 
   for (auto & joint : joints_) {
@@ -407,7 +407,9 @@ CallbackReturn ODriveHardwareInterface::initialize_transport()
       std::chrono::milliseconds(runtime_config_.usb_retry_delay_ms),
       cycle_stats_.usb_write_retries_total);
     if (write_enable_status != 0) {
-      update_transport_health(false, write_enable_status, "disabling watchdog during initialization");
+      update_transport_health(
+        false, write_enable_status,
+        "disabling watchdog during initialization");
       transport_.reset();
       return CallbackReturn::ERROR;
     }
@@ -749,17 +751,24 @@ void ODriveHardwareInterface::update_transport_health(bool ok, int error_code, c
     transport_log_state_.known = true;
     transport_log_state_.ok = ok;
     transport_log_state_.last_error_code = ok ? 0 : error_code;
-    transport_log_state_.last_context = context ? std::string(context) : std::string();
+    if (context) {
+      transport_log_state_.last_context = context;
+    } else {
+      transport_log_state_.last_context.clear();
+    }
     transport_log_state_.last_transition = now;
     transport_log_state_.last_summary = now;
     if (!ok) {
       transport_log_state_.offline_since = now;
+      const char * last_context = transport_log_state_.last_context.empty() ? "unknown" :
+        transport_log_state_.last_context.c_str();
       RCUTILS_LOG_WARN_NAMED(
         kLoggerName,
-        "ODrive transport offline (err=%d) during %s. Outputs disabled; deactivate+activate to reconnect. "
+        "ODrive transport offline (err=%d) during %s. "
+        "Outputs disabled; deactivate+activate to reconnect. "
         "If e-stop is pressed, this may be expected.",
         transport_log_state_.last_error_code,
-        transport_log_state_.last_context.empty() ? "unknown" : transport_log_state_.last_context.c_str());
+        last_context);
     }
     return;
   }
@@ -785,17 +794,21 @@ void ODriveHardwareInterface::update_transport_health(bool ok, int error_code, c
 
     if (!ok && was_ok) {
       transport_log_state_.offline_since = now;
+      const char * last_context = transport_log_state_.last_context.empty() ? "unknown" :
+        transport_log_state_.last_context.c_str();
       RCUTILS_LOG_WARN_NAMED(
         kLoggerName,
-        "ODrive transport offline (err=%d) during %s. Outputs disabled; deactivate+activate to reconnect. "
+        "ODrive transport offline (err=%d) during %s. "
+        "Outputs disabled; deactivate+activate to reconnect. "
         "If e-stop is pressed, this may be expected.",
         transport_log_state_.last_error_code,
-        transport_log_state_.last_context.empty() ? "unknown" : transport_log_state_.last_context.c_str());
+        last_context);
       return;
     }
 
     if (ok && !was_ok) {
-      const double offline_s = std::chrono::duration<double>(now - transport_log_state_.offline_since).count();
+      const double offline_s = std::chrono::duration<double>(
+        now - transport_log_state_.offline_since).count();
       RCUTILS_LOG_INFO_NAMED(kLoggerName, "ODrive transport recovered after %.1fs.", offline_s);
       return;
     }
@@ -805,13 +818,15 @@ void ODriveHardwareInterface::update_transport_health(bool ok, int error_code, c
     const double since_summary_s =
       std::chrono::duration<double>(now - transport_log_state_.last_summary).count();
     if (since_summary_s >= runtime_config_.transport_summary_period_sec) {
-      const double offline_s = std::chrono::duration<double>(now - transport_log_state_.offline_since).count();
+      const double offline_s = std::chrono::duration<double>(
+        now - transport_log_state_.offline_since).count();
       RCUTILS_LOG_WARN_NAMED(
         kLoggerName,
         "ODrive transport still offline (err=%d) for %.1fs (last: %s).",
         transport_log_state_.last_error_code,
         offline_s,
-        transport_log_state_.last_context.empty() ? "unknown" : transport_log_state_.last_context.c_str());
+        transport_log_state_.last_context.empty() ?
+        "unknown" : transport_log_state_.last_context.c_str());
       transport_log_state_.last_summary = now;
     }
   }
@@ -1686,6 +1701,7 @@ return_type ODriveHardwareInterface::read(const rclcpp::Time &, const rclcpp::Du
     }
     for (auto & sensor : sensors_) {
       sensor.vbus_voltage = std::numeric_limits<double>::quiet_NaN();
+      sensor.transport_error = std::numeric_limits<double>::quiet_NaN();
     }
     return return_type::OK;
   }
@@ -2294,7 +2310,8 @@ void ODriveHardwareInterface::async_io_init_buffers()
   async_latest_telemetry_.transport_error = 0;
   async_latest_telemetry_.sensor_vbus_voltage.assign(
     sensors_.size(), std::numeric_limits<double>::quiet_NaN());
-  async_latest_telemetry_.sensor_transport_error.assign(sensors_.size(), 0.0);
+  async_latest_telemetry_.sensor_transport_error.assign(
+    sensors_.size(), std::numeric_limits<double>::quiet_NaN());
   async_latest_telemetry_.drive_can_error.assign(drives_.size(), 0U);
   async_latest_telemetry_.drive_can_error_read_error.assign(drives_.size(), 0.0);
 
@@ -2480,6 +2497,9 @@ void ODriveHardwareInterface::async_io_thread_main()
       }
       for (auto & v : snapshot.sensor_vbus_voltage) {
         v = std::numeric_limits<double>::quiet_NaN();
+      }
+      for (auto & e : snapshot.sensor_transport_error) {
+        e = std::numeric_limits<double>::quiet_NaN();
       }
     } else {
       // Sensors
